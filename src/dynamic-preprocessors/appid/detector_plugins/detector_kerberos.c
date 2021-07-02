@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -280,7 +280,7 @@ static int krb_server_init(const InitServiceAPI * const init_api)
 #define ERROR_MSG_TYPE      0x1e
 
 static KRB_RETCODE krb_walk_client_packet(KRBState *krbs, const uint8_t *s, const uint8_t *end,
-                                           tAppIdData *flowp, SFSnortPacket *pkt, int dir, const tAppIdConfig *pConfig)
+                                          tAppIdData *flowp, SFSnortPacket *pkt)
 {
     static const uint8_t KRB_CLIENT_VERSION[] = "\x0a1\x003\x002\x001";
     static const uint8_t KRB_CLIENT_TYPE[] = "\x0a2\x003\x002\x001";
@@ -403,7 +403,7 @@ static KRB_RETCODE krb_walk_client_packet(KRBState *krbs, const uint8_t *s, cons
 #endif
                         if (!krbs->added)
                         {
-                            client_app_mod.api->add_app(pkt, dir, pConfig, flowp, APP_ID_KERBEROS, APP_ID_KERBEROS, krbs->ver);
+                            client_app_mod.api->add_app(flowp, APP_ID_KERBEROS, APP_ID_KERBEROS, krbs->ver);
                             krbs->added = 1;
                         }
                         krbs->state = KRB_STATE_APP;
@@ -926,7 +926,7 @@ static KRB_RETCODE krb_walk_server_packet(KRBState *krbs, const uint8_t *s, cons
             if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED) && pkt)
             {
                 service_mod.api->add_service(flowp, pkt, dir, &svc_element, APP_ID_KERBEROS,
-                        NULL, krbs->ver, NULL, NULL);
+                        NULL, krbs->ver, NULL);
                 setAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED);
             }
 
@@ -1008,7 +1008,7 @@ static CLIENT_APP_RETCODE krb_client_validate(const uint8_t *data, uint16_t size
 
     if (dir == APP_ID_FROM_INITIATOR)
     {
-        if (krb_walk_client_packet(&fd->clnt_state, s, end, flowp, pkt, dir, pConfig) == KRB_FAILED)
+        if (krb_walk_client_packet(&fd->clnt_state, s, end, flowp, pkt) == KRB_FAILED)
         {
 #ifdef DEBUG_KERBEROS
             _dpd.debugMsg(DEBUG_LOG,"%p Failed\n",flowp);
@@ -1097,7 +1097,7 @@ static int krb_server_validate(ServiceValidationArgs* args)
         if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
         {
             service_mod.api->fail_service(flowp, pkt, dir, &svc_element,
-                                          service_mod.flow_data_index, args->pConfig, NULL);
+                                          service_mod.flow_data_index, args->pConfig);
             return SERVICE_NOMATCH;
         }
         clearAppIdFlag(flowp, APPID_SESSION_CONTINUE);
@@ -1105,7 +1105,7 @@ static int krb_server_validate(ServiceValidationArgs* args)
     }
 
 inprocess:
-    service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element, NULL);
+    service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 }

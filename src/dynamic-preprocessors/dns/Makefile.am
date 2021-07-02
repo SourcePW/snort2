@@ -27,7 +27,6 @@ dns_buffer_dump.h
 endif
 
 EXTRA_DIST = \
-sf_dns.vcxproj \
 sf_dns.dsp
 
 all-local: $(LTLIBRARIES)

@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -69,8 +69,6 @@
 #define MAX_ATTR_LEN           1024
 #define HTTP_PREFIX "http://"
 
-#define MULTI_BUF_SIZE 1024
-
 #define APP_MAPPING_FILE "appMapping.data"
 
 #ifdef RNA_DEBUG_PE
@@ -93,40 +91,28 @@ PreprocStats serviceMatchPerfStats;
 #define HTTP_PATTERN_MAX_LEN    1024
 #define PORT_MAX 65535
 
-unsigned long app_id_ongoing_session = 0;
-unsigned long app_id_total_alloc = 0;
 unsigned long app_id_raw_packet_count = 0;
 unsigned long app_id_processed_packet_count = 0;
 unsigned long app_id_ignored_packet_count = 0;
-unsigned long app_id_flow_data_free_list_count = 0;
-unsigned long app_id_data_free_list_count = 0;
-unsigned long app_id_tmp_free_list_count = 0;
-unsigned long app_id_session_heap_alloc_count = 0;
-unsigned long app_id_session_freelist_alloc_count = 0;
-
 static tAppIdData *app_id_free_list;
 static tTmpAppIdData *tmp_app_id_free_list;
 static uint32_t snortInstance;
 int app_id_debug;
 static int ptype_scan_counts[NUMBER_OF_PTYPES];
 
-static void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRECTION direction, tAppIdData* appIdSession, int confidence, tAppId* proto_list, ThirdPartyAppIDAttributeData* attribute_data);
-static void ExamineRtmpMetadata(SFSnortPacket* p, APPID_SESSION_DIRECTION direction, tAppIdData *appIdSession);
-
-AppIdDebugHostInfo_t AppIdDebugHostInfo;
+static void ProcessThirdPartyResults(SFSnortPacket* p, tAppIdData* appIdSession, int confidence, tAppId* proto_list, ThirdPartyAppIDAttributeData* attribute_data);
+static void ExamineRtmpMetadata(tAppIdData *appIdSession);
 
 static inline void appSharedDataFree(tAppIdData * sharedData)
 {
     sharedData->next = app_id_free_list;
     app_id_free_list = sharedData;
-    app_id_data_free_list_count++;
 }
 
 static inline void appTmpSharedDataFree(tTmpAppIdData * sharedData)
 {
     sharedData->next = tmp_app_id_free_list;
     tmp_app_id_free_list = sharedData;
-    app_id_tmp_free_list_count++;
 }
 
 static inline void appHttpFieldClear (httpSession *hsession)
@@ -198,16 +184,6 @@ static inline void appHttpFieldClear (httpSession *hsession)
         sfaddr_free(hsession->xffAddr);
         hsession->xffAddr = NULL;
     }
-    if (hsession->xffPrecedence)
-    {
-        int i;
-
-        for (i = 0; i < hsession->numXffFields; i++)
-            free(hsession->xffPrecedence[i]);
-        _dpd.snortFree(hsession->xffPrecedence, hsession->numXffFields*sizeof(char*),
-            PP_APP_ID, PP_MEM_CATEGORY_SESSION);
-        hsession->xffPrecedence = NULL;
-    }
 }
 
 static inline void appHttpSessionDataFree (httpSession *hsession)
@@ -231,8 +207,7 @@ static inline void appHttpSessionDataFree (httpSession *hsession)
     }
     if (hsession->fflow)
     {
-        _dpd.snortFree(hsession->fflow, sizeof(*hsession->fflow),
-             PP_APP_ID, PP_MEM_CATEGORY_SESSION);
+        free(hsession->fflow);
         hsession->fflow = NULL;
     }
     if (hsession->via)
@@ -250,13 +225,8 @@ static inline void appHttpSessionDataFree (httpSession *hsession)
         free(hsession->response_code);
         hsession->response_code = NULL;
     }
-    if (hsession->tunDest)
-    {
-        free(hsession->tunDest);
-        hsession->tunDest = NULL;
-    }
 
-     _dpd.snortFree(hsession, sizeof(*hsession), PP_APP_ID, PP_MEM_CATEGORY_SESSION);
+    free(hsession);
 }
 
 static inline void appDNSSessionDataFree(dnsSession *dsession)
@@ -267,7 +237,7 @@ static inline void appDNSSessionDataFree(dnsSession *dsession)
         free(dsession->host);
         dsession->host = NULL;
     }
-    _dpd.snortFree(dsession, sizeof(*dsession), PP_APP_ID, PP_MEM_CATEGORY_SESSION);
+    free(dsession);
 }
 
 static inline void appTlsSessionDataFree (tlsSession *tsession)
@@ -280,40 +250,8 @@ static inline void appTlsSessionDataFree (tlsSession *tsession)
         free(tsession->tls_cname);
     if (tsession->tls_orgUnit)
         free(tsession->tls_orgUnit);
-    if (tsession->tls_first_san)
-        free(tsession->tls_first_san);
-    _dpd.snortFree(tsession, sizeof(*tsession), PP_APP_ID, PP_MEM_CATEGORY_SESSION);
+    free(tsession);
 }
-
-#ifdef REG_TEST
-void appIdRegTestDumpEndOfSession(tAppIdData *appid_session)
-{
-    if (appid_session == NULL)
-        return;
-
-    _dpd.logMsg("AppID End of Session...\n");
-
-    _dpd.logMsg("    pickServiceAppId(appid_session) = %d\n", pickServiceAppId(appid_session));
-    _dpd.logMsg("    pickPayloadId(appid_session) = %d\n", pickPayloadId(appid_session));
-    _dpd.logMsg("    pickClientAppId(appid_session) = %d\n", pickClientAppId(appid_session));
-    _dpd.logMsg("    pickMiscAppId(appid_session) = %d\n", pickMiscAppId(appid_session));
-
-    if (appid_session->dsession != NULL)
-    {
-        _dpd.logMsg("    appid_session->dsession->host = %s\n", appid_session->dsession->host ?: "NULL");
-        _dpd.logMsg("    appid_session->dsession->options_offset = %u\n", appid_session->dsession->options_offset);
-    }
-
-    if (appid_session->tsession != NULL)
-    {
-        _dpd.logMsg("    appid_session->tsession->tls_host = %s\n", appid_session->tsession->tls_host ?: "NULL");
-    }
-
-    _dpd.logMsg("    Flow is %s, ignore flag is %s\n",
-        getAppIdFlag(appid_session, APPID_SESSION_OOO)? "out-of-order":"in-order",
-        getAppIdFlag(appid_session, APPID_SESSION_IGNORE_FLOW)? "true":"false");
-}
-#endif
 
 void appSharedDataDelete(tAppIdData * sharedData)
 {
@@ -326,11 +264,6 @@ void appSharedDataDelete(tAppIdData * sharedData)
         if (sharedData->service_port == DEBUG_FW_APPID_PORT)
 #endif
             fprintf(SF_DEBUG_FILE, "Deleting session %p\n", sharedData);
-#endif
-        app_id_ongoing_session--;
-#ifdef REG_TEST
-        if (appidStaticConfig->appid_reg_test_mode)
-            appIdRegTestDumpEndOfSession(sharedData);
 #endif
         /*check daq flag */
         appIdStatsUpdate(sharedData);
@@ -373,8 +306,7 @@ void appSharedDataDelete(tAppIdData * sharedData)
         appTlsSessionDataFree(sharedData->tsession);
         appDNSSessionDataFree(sharedData->dsession);
         sharedData->tsession = NULL;
-        if (sharedData->multiPayloadList)
-            sfghash_delete(sharedData->multiPayloadList);
+
         free(sharedData->firewallEarlyData);
         sharedData->firewallEarlyData = NULL;
 
@@ -388,26 +320,23 @@ static int16_t snortId_for_unsynchronized;
 static int16_t snortId_for_ftp_data;
 static int16_t snortId_for_http2;
 
-tAppIdData* appSharedDataAlloc(uint8_t proto,  const struct in6_addr *ip, uint16_t port)
+tAppIdData* appSharedDataAlloc(uint8_t proto,  struct in6_addr *ip, uint16_t port)
 {
     static uint32_t gFlowId;
     tAppIdData *data;
 
-    app_id_ongoing_session++;
     if (app_id_free_list)
     {
         data = app_id_free_list;
         app_id_free_list = data->next;
         memset(data, 0, sizeof(*data));
-        app_id_data_free_list_count--;
-        app_id_session_freelist_alloc_count++;
     }
-    else if (!(data = _dpd.snortAlloc(1, sizeof(*data), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+    else if (!(data = calloc(1, sizeof(*data))))
         DynamicPreprocessorFatalMessage("Could not allocate tAppIdData data");
-    else
-        app_id_session_heap_alloc_count++;
 
-    app_id_total_alloc++;
+    if (thirdparty_appid_module)
+        if (!(data->tpsession = thirdparty_appid_module->session_create()))
+            DynamicPreprocessorFatalMessage("Could not allocate tAppIdData->tpsession data");
 
     data->flowId = ++gFlowId;
     data->common.fsf_type.flow_type = APPID_SESSION_TYPE_NORMAL;
@@ -470,6 +399,7 @@ static inline void appSharedReInitData(tAppIdData* session)
     //service
     if (!getAppIdFlag(session, APPID_SESSION_STICKY_SERVICE))
     {
+        clearAppIdFlag(session, APPID_SESSION_STICKY_SERVICE);
 
         session->tpAppId = session->serviceAppId = session->portServiceAppId = APP_ID_NONE;
         if (session->serviceVendor)
@@ -488,12 +418,6 @@ static inline void appSharedReInitData(tAppIdData* session)
         session->rnaServiceState = RNA_STATE_NONE;
         session->serviceData = NULL;
         AppIdFlowdataDeleteAllByMask(session, APPID_SESSION_DATA_SERVICE_MODSTATE_BIT);
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-        session->serviceAsId = 0xFF;
-#endif
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID)
-        session->carrierId = 0;
-#endif
     }
 
     //client
@@ -504,14 +428,6 @@ static inline void appSharedReInitData(tAppIdData* session)
         session->clientVersion = NULL;
     }
     session->rnaClientState = RNA_STATE_NONE;
-    session->clientData = NULL;
-    if (session->candidate_client_list)
-    {
-        sflist_free(session->candidate_client_list);
-        session->candidate_client_list = NULL;
-    }
-    session->num_candidate_clients_tried = 0;
-
     AppIdFlowdataDeleteAllByMask(session, APPID_SESSION_DATA_CLIENT_MODSTATE_BIT);
 
     //3rd party cleaning
@@ -525,22 +441,20 @@ static inline void appSharedReInitData(tAppIdData* session)
 }
 void fwAppIdFini(tAppIdConfig *pConfig)
 {
-#ifdef APPID_FULL_CLEANUP
+#ifdef RNA_FULL_CLEANUP
     tAppIdData *app_id;
     tTmpAppIdData *tmp_app_id;
 
     while ((app_id = app_id_free_list))
     {
         app_id_free_list = app_id->next;
-        app_id_data_free_list_count--;
-        _dpd.snortFree(app_id, sizeof(*app_id), PP_APP_ID, PP_MEM_CATEGORY_SESSION);
+        free(app_id);
     }
 
     while ((tmp_app_id = tmp_app_id_free_list))
     {
         tmp_app_id_free_list = tmp_app_id->next;
-        app_id_tmp_free_list_count--;
-        _dpd.snortFree(tmp_app_id, sizeof(*tmp_app_id), PP_APP_ID, PP_MEM_CATEGORY_SESSION);
+        free(tmp_app_id);
     }
     AppIdFlowdataFini();
 #endif
@@ -662,10 +576,6 @@ static inline bool fwAppIdDebugCheck(void *lwssn, tAppIdData *session, volatile 
             uint16_t dport;
             char sipstr[INET6_ADDRSTRLEN];
             char dipstr[INET6_ADDRSTRLEN];
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-            uint16_t sAsId; 
-            uint16_t dAsId;
-#endif
             if (session && session->common.fsf_type.flow_type != APPID_SESSION_TYPE_IGNORE)
             {
                 if (session->common.initiator_port)
@@ -676,10 +586,6 @@ static inline bool fwAppIdDebugCheck(void *lwssn, tAppIdData *session, volatile 
                         dip = (const struct in6_addr*)key->ip_h;
                         sport = key->port_l;
                         dport = key->port_h;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                        sAsId = key->addressSpaceId_l;
-                        dAsId = key->addressSpaceId_h;
-#endif
                     }
                     else
                     {
@@ -687,10 +593,6 @@ static inline bool fwAppIdDebugCheck(void *lwssn, tAppIdData *session, volatile 
                         dip = (const struct in6_addr*)key->ip_l;
                         sport = key->port_h;
                         dport = key->port_l;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                        sAsId = key->addressSpaceId_h;
-                        dAsId = key->addressSpaceId_l;
-#endif
                     }
                 }
                 else if (memcmp(&session->common.initiator_ip, key->ip_l, sizeof(session->common.initiator_ip))==0)
@@ -699,10 +601,6 @@ static inline bool fwAppIdDebugCheck(void *lwssn, tAppIdData *session, volatile 
                     dip = (const struct in6_addr*)key->ip_h;
                     sport = key->port_l;
                     dport = key->port_h;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                    sAsId = key->addressSpaceId_l;
-                    dAsId = key->addressSpaceId_h;
-#endif
                 }
                 else
                 {
@@ -710,10 +608,6 @@ static inline bool fwAppIdDebugCheck(void *lwssn, tAppIdData *session, volatile 
                     dip = (const struct in6_addr*)key->ip_l;
                     sport = key->port_h;
                     dport = key->port_l;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                    sAsId = key->addressSpaceId_h;
-                    dAsId = key->addressSpaceId_l;
-#endif
                 }
             }
             else
@@ -722,10 +616,6 @@ static inline bool fwAppIdDebugCheck(void *lwssn, tAppIdData *session, volatile 
                 dip = (const struct in6_addr*)key->ip_h;
                 sport = key->port_l;
                 dport = key->port_h;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                sAsId = key->addressSpaceId_l;
-                dAsId = key->addressSpaceId_h;
-#endif
             }
             sipstr[0] = 0;
             if (sip->s6_addr32[0] || sip->s6_addr32[1] || sip->s6_addr16[4] || (sip->s6_addr16[5] && sip->s6_addr16[5] != 0xFFFF))
@@ -751,44 +641,15 @@ static inline bool fwAppIdDebugCheck(void *lwssn, tAppIdData *session, volatile 
                 offset = 12;
             }
             inet_ntop(af, &dip->s6_addr[offset], dipstr, sizeof(dipstr));
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID)
-            uint32_t cid = key->carrierId;
 #ifdef HAVE_DAQ_ADDRESS_SPACE_ID
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-            snprintf(debug_session, FW_DEBUG_SESSION_ID_SIZE, "%s-%u -> %s-%u %u%s AS %u-%u I %u CID %u",
-                     sipstr, (unsigned)sport, dipstr, (unsigned)dport, (unsigned)key->protocol,
-                     (direction == APP_ID_FROM_INITIATOR) ? "":" R",
-                     sAsId, dAsId, (unsigned)snortInstance, (unsigned)cid);
-#else
-            snprintf(debug_session, FW_DEBUG_SESSION_ID_SIZE, "%s-%u -> %s-%u %u%s AS %u I %u CID %u",
-                     sipstr, (unsigned)sport, dipstr, (unsigned)dport, (unsigned)key->protocol,
-                     (direction == APP_ID_FROM_INITIATOR) ? "":" R",
-                     (unsigned)key->addressSpaceId, (unsigned)snortInstance, (unsigned)cid);
-#endif
-#else
-            snprintf(debug_session, FW_DEBUG_SESSION_ID_SIZE, "%s-%u -> %s-%u %u%s I %u CID %u",
-                     sipstr, (unsigned)sport, dipstr, (unsigned)dport, (unsigned)key->protocol,
-                     (direction == APP_ID_FROM_INITIATOR) ? "":" R", (unsigned)snortInstance,
-                     (unsigned)cid );
-#endif
-#else /* No carrierid support */
-#ifdef HAVE_DAQ_ADDRESS_SPACE_ID
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-            snprintf(debug_session, FW_DEBUG_SESSION_ID_SIZE, "%s-%u -> %s-%u %u%s AS %u-%u I %u",
-                     sipstr, (unsigned)sport, dipstr, (unsigned)dport, (unsigned)key->protocol,
-                     (direction == APP_ID_FROM_INITIATOR) ? "":" R",
-                     sAsId, dAsId, (unsigned)snortInstance);
-#else
             snprintf(debug_session, FW_DEBUG_SESSION_ID_SIZE, "%s-%u -> %s-%u %u%s AS %u I %u",
                      sipstr, (unsigned)sport, dipstr, (unsigned)dport, (unsigned)key->protocol,
                      (direction == APP_ID_FROM_INITIATOR) ? "":" R",
                      (unsigned)key->addressSpaceId, (unsigned)snortInstance);
-#endif
 #else
             snprintf(debug_session, FW_DEBUG_SESSION_ID_SIZE, "%s-%u -> %s-%u %u%s I %u",
                      sipstr, (unsigned)sport, dipstr, (unsigned)dport, (unsigned)key->protocol,
                      (direction == APP_ID_FROM_INITIATOR) ? "":" R", (unsigned)snortInstance);
-#endif
 #endif
             return true;
         }
@@ -986,20 +847,10 @@ static inline int isSpecialSessionMonitored(const SFSnortPacket *p)
     }
     return 0;
 }
-
 static inline uint64_t isSessionMonitored(const SFSnortPacket *p, APPID_SESSION_DIRECTION dir, tAppIdData *session)
 {
     uint64_t flags;
-    uint64_t flow_flags = 0;
-    tAppIdConfig *pConfig = appIdActiveConfigGet();
-
-    if (pConfig == NULL)
-        return flow_flags;
-
-    if (pConfig->isAppIdAlwaysRequired == APPID_REQ_UNINITIALIZED)
-        pConfig->isAppIdAlwaysRequired = _dpd.isAppIdRequired() ? APPID_REQ_YES : APPID_REQ_NO;
-    if (pConfig->isAppIdAlwaysRequired == APPID_REQ_YES)
-        flow_flags |= APPID_SESSION_DISCOVER_APP;
+    uint64_t flow_flags = _dpd.isAppIdRequired() ? APPID_SESSION_DISCOVER_APP : 0;
 
     flow_flags |= (dir == APP_ID_FROM_INITIATOR) ? APPID_SESSION_INITIATOR_SEEN : APPID_SESSION_RESPONDER_SEEN;
     if (session)
@@ -1019,10 +870,7 @@ static inline uint64_t isSessionMonitored(const SFSnortPacket *p, APPID_SESSION_
                 {
                     flags = isIPMonitored(p, 0);
                     if (flags & IPFUNCS_HOSTS_IP)
-                    {
                         flow_flags |= APPID_SESSION_INITIATOR_MONITORED;
-                        AppIdDebugHostInfo.monitorType = APPID_DEBUG_HOST_MONITOR0;
-                    }
                     else
                         flow_flags &= ~APPID_SESSION_INITIATOR_MONITORED;
                 }
@@ -1051,10 +899,7 @@ static inline uint64_t isSessionMonitored(const SFSnortPacket *p, APPID_SESSION_
                 {
                     flags = isIPMonitored(p, 1);
                     if (flags & IPFUNCS_HOSTS_IP)
-                    {
                         flow_flags |= APPID_SESSION_INITIATOR_MONITORED;
-                        AppIdDebugHostInfo.monitorType = APPID_DEBUG_HOST_MONITOR1;
-                    }
                     else
                         flow_flags &= ~APPID_SESSION_INITIATOR_MONITORED;
                 }
@@ -1071,10 +916,7 @@ static inline uint64_t isSessionMonitored(const SFSnortPacket *p, APPID_SESSION_
                 flags = isIPMonitored(p, 0);
                 flow_flags |= APPID_SESSION_INITIATOR_CHECKED;
                 if (flags & IPFUNCS_HOSTS_IP)
-                {
                     flow_flags |= APPID_SESSION_INITIATOR_MONITORED;
-                    AppIdDebugHostInfo.monitorType = APPID_DEBUG_HOST_MONITOR2;
-                }
                 if (flags & IPFUNCS_USER_IP)
                     flow_flags |= APPID_SESSION_DISCOVER_USER;
                 if (flags & IPFUNCS_APPLICATION)
@@ -1121,10 +963,7 @@ static inline uint64_t isSessionMonitored(const SFSnortPacket *p, APPID_SESSION_
                 if (flags & IPFUNCS_CHECKED)
                     flow_flags |= APPID_SESSION_INITIATOR_CHECKED;
                 if (flags & IPFUNCS_HOSTS_IP)
-                {
                     flow_flags |= APPID_SESSION_INITIATOR_MONITORED;
-                    AppIdDebugHostInfo.monitorType = APPID_DEBUG_HOST_MONITOR3;
-                }
                 if (flags & IPFUNCS_USER_IP)
                     flow_flags |= APPID_SESSION_DISCOVER_USER;
                 if (flags & IPFUNCS_APPLICATION)
@@ -1145,10 +984,7 @@ static inline uint64_t isSessionMonitored(const SFSnortPacket *p, APPID_SESSION_
         flags = isIPMonitored(p, 0);
         flow_flags |= APPID_SESSION_INITIATOR_CHECKED;
         if (flags & IPFUNCS_HOSTS_IP)
-        {
             flow_flags |= APPID_SESSION_INITIATOR_MONITORED;
-            AppIdDebugHostInfo.monitorType = APPID_DEBUG_HOST_MONITOR4;
-        }
         if (flags & IPFUNCS_USER_IP)
             flow_flags |= APPID_SESSION_DISCOVER_USER;
         if (flags & IPFUNCS_APPLICATION)
@@ -1182,10 +1018,7 @@ static inline uint64_t isSessionMonitored(const SFSnortPacket *p, APPID_SESSION_
             if (flags & IPFUNCS_CHECKED)
                 flow_flags |= APPID_SESSION_INITIATOR_CHECKED;
             if (flags & IPFUNCS_HOSTS_IP)
-            {
                 flow_flags |= APPID_SESSION_INITIATOR_MONITORED;
-                AppIdDebugHostInfo.monitorType = APPID_DEBUG_HOST_MONITOR5;
-            }
             if (flags & IPFUNCS_USER_IP)
                 flow_flags |= APPID_SESSION_DISCOVER_USER;
             if (flags & IPFUNCS_APPLICATION)
@@ -1201,58 +1034,7 @@ static inline uint64_t isSessionMonitored(const SFSnortPacket *p, APPID_SESSION_
     return flow_flags;
 }
 
-void CheckDetectorCallback(const SFSnortPacket *p, tAppIdData *session, APPID_SESSION_DIRECTION direction, tAppId appId, const tAppIdConfig *pConfig)
-{
-    AppInfoTableEntry *entry;
-    int ret;
-
-    if(!p || !session)
-        return;
-
-    if ((entry = appInfoEntryGet(appId, pConfig)))
-    {
-        if (entry->flags & APPINFO_FLAG_CLIENT_DETECTOR_CALLBACK)
-        {
-            if (entry->clntValidator)
-            {
-                if (entry->clntValidator->detectorContext)
-                    return;
-
-                entry->clntValidator->detectorContext = true;
-                ret = entry->clntValidator->detectorCallback(p->payload, p->payload_size, direction,
-                                                       session, p, entry->clntValidator->userData, pConfig);
-                if (app_id_debug_session_flag)
-                    _dpd.logMsg("AppIdDbg %s %s client detector callback returned %d\n", app_id_debug_session,
-                                entry->clntValidator->name ? entry->clntValidator->name : "UNKNOWN", ret);
-		entry->clntValidator->detectorContext = false;
-            }
-        }
-        if (entry->flags & APPINFO_FLAG_SERVICE_DETECTOR_CALLBACK)
-        {
-            if (entry->svrValidator)
-            {
-                if (entry->svrValidator->detectorContext)
-		    return;
-
-		entry->svrValidator->detectorContext = true;
-                ret = entry->svrValidator->detectorCallback(p->payload, p->payload_size, direction,
-                                                      session, p, entry->svrValidator->userdata, pConfig);
-                if (app_id_debug_session_flag)
-                    _dpd.logMsg("AppIdDbg %s %s service detector callback returned %d\n", app_id_debug_session,
-                                entry->svrValidator->name ? entry->svrValidator->name : "UNKNOWN", ret);
-		entry->svrValidator->detectorContext = false;
-            }
-        }
-    }
-}
-static inline bool svcTakingTooMuchTime(tAppIdData* session)
-{
-    return ((session->initiatorPcketCountWithoutReply > appidStaticConfig-> max_packet_service_fail_ignore_bytes) ||
-            (session->initiatorPcketCountWithoutReply > appidStaticConfig->max_packet_before_service_fail &&
-             session->initiatorBytesWithoutServerReply > appidStaticConfig->max_bytes_before_service_fail));
-}
-
-static inline void setServiceAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION direction, tAppIdData *session, tAppId serviceAppId, char *vendor, char **version)
+static inline void setServiceAppIdData(tAppIdData *session, tAppId serviceAppId, char *vendor, char **version)
 {
     if (serviceAppId <= APP_ID_NONE)
         return;
@@ -1271,9 +1053,7 @@ static inline void setServiceAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION
     {
         session->serviceAppId = serviceAppId;
 
-        CheckDetectorCallback(p, session, direction, serviceAppId, appIdActiveConfigGet());
-
-        if (appidStaticConfig->instance_id)
+        if (appidStaticConfig.instance_id)
             checkSandboxDetection(serviceAppId);
 
         /* Clear out previous values of vendor & version */
@@ -1325,7 +1105,7 @@ static inline void setServiceAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION
     }
 }
 
-static inline void setClientAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION direction, tAppIdData *session, tAppId clientAppId, char **version)
+static inline void setClientAppIdData(tAppIdData *session, tAppId clientAppId, char **version)
 {
     tAppIdConfig *pConfig = appIdActiveConfigGet();
     if (clientAppId <= APP_ID_NONE || clientAppId == APP_ID_HTTP)
@@ -1343,7 +1123,7 @@ static inline void setClientAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION 
         unsigned prev_priority = appInfoEntryPriorityGet(session->clientAppId, pConfig);
         unsigned curr_priority = appInfoEntryPriorityGet(clientAppId, pConfig) ;
 
-        if (appidStaticConfig->instance_id)
+        if (appidStaticConfig.instance_id)
             checkSandboxDetection(clientAppId);
 
         if ((session->clientAppId) && (prev_priority > curr_priority ))
@@ -1356,8 +1136,6 @@ static inline void setClientAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION 
             return;
         }
         session->clientAppId = clientAppId;
-
-	CheckDetectorCallback(p, session, direction, clientAppId, pConfig);
 
         if (session->clientVersion)
             free(session->clientVersion);
@@ -1386,14 +1164,14 @@ static inline void setReferredPayloadAppIdData(tAppIdData *session, tAppId refer
 
     if (session->referredPayloadAppId != referredPayloadAppId)
     {
-        if (appidStaticConfig->instance_id)
+        if (appidStaticConfig.instance_id)
             checkSandboxDetection(referredPayloadAppId);
 
         session->referredPayloadAppId = referredPayloadAppId;
     }
 }
 
-static inline void setPayloadAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION direction, tAppIdData *session, tAppId payloadAppId, char **version)
+static inline void setPayloadAppIdData(tAppIdData *session, tAppId payloadAppId, char **version)
 {
     tAppIdConfig *pConfig = appIdActiveConfigGet();
 
@@ -1405,15 +1183,13 @@ static inline void setPayloadAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION
         unsigned prev_priority = appInfoEntryPriorityGet(session->payloadAppId, pConfig);
         unsigned curr_priority = appInfoEntryPriorityGet(payloadAppId, pConfig);
 
-        if (appidStaticConfig->instance_id)
+        if (appidStaticConfig.instance_id)
             checkSandboxDetection(payloadAppId);
 
         if ((session->payloadAppId ) && (prev_priority > curr_priority ))
             return;
 
         session->payloadAppId = payloadAppId;
-
-        CheckDetectorCallback(p, session, direction, payloadAppId, pConfig);
 
         if (session->payloadVersion)
             free(session->payloadVersion);
@@ -1432,34 +1208,6 @@ static inline void setPayloadAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION
             free(session->payloadVersion);
         session->payloadVersion = *version;
         *version = NULL;
-    }
-}
-
-static inline void setTPAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION direction, tAppIdData *session, tAppId tpAppId)
-{
-    tAppIdConfig *pConfig = appIdActiveConfigGet();
-
-    if (tpAppId <= APP_ID_NONE || !session)
-        return;
-
-    if (session->tpAppId != tpAppId)
-    {
-        session->tpAppId = tpAppId;
-        CheckDetectorCallback(p, session, direction, tpAppId, pConfig);
-    }
-}
-
-static inline void setTPPayloadAppIdData(SFSnortPacket *p, APPID_SESSION_DIRECTION direction, tAppIdData *session, tAppId tpPayloadAppId)
-{
-    tAppIdConfig *pConfig = appIdActiveConfigGet();
-
-    if (tpPayloadAppId <= APP_ID_NONE || !session)
-        return;
-
-    if (session->tpPayloadAppId != tpPayloadAppId)
-    {
-        session->tpPayloadAppId = tpPayloadAppId;
-        CheckDetectorCallback(p, session, direction, tpPayloadAppId, pConfig);
     }
 }
 
@@ -1625,7 +1373,7 @@ static char *httpFieldName[ NUMBER_OF_PTYPES ] = // for use in debug messages
     "body",
 };
 
-static inline void processCHP(tAppIdData *session, char **version, SFSnortPacket *p, APPID_SESSION_DIRECTION direction, const tAppIdConfig *pConfig)
+static inline void processCHP(tAppIdData *session, char **version, SFSnortPacket *p, const tAppIdConfig *pConfig)
 {
     int i;
     int found_in_buffer = 0;
@@ -1753,14 +1501,6 @@ static inline void processCHP(tAppIdData *session, char **version, SFSnortPacket
                 break;
             }
         }
-        for (i = 0; i < NUMBER_OF_PTYPES; i++)
-        {
-            if (chp_matches[i]) // free leftover matches
-            {
-                FreeMatchedCHPActions(chp_matches[i]);
-                chp_matches[i] = NULL;
-            }
-        }
         if (!http_session->chp_candidate)
         {
             http_session->chp_finished = 1;
@@ -1795,22 +1535,21 @@ static inline void processCHP(tAppIdData *session, char **version, SFSnortPacket
                 CHP_APPIDINSTANCE_TO_ID(http_session->chp_candidate);
             if (http_session->app_type_flags & APP_TYPE_SERVICE)
             {
-                setServiceAppIdData(p, direction, session, chp_final, NULL, version);
+                setServiceAppIdData(session, chp_final, NULL, version);
             }
             if (http_session->app_type_flags & APP_TYPE_CLIENT)
             {
-                setClientAppIdData(p, direction, session, chp_final, version);
+                setClientAppIdData(session, chp_final, version);
             }
             if (http_session->app_type_flags & APP_TYPE_PAYLOAD)
             {
-                setPayloadAppIdData(p, direction, session, chp_final, version);
+                setPayloadAppIdData(session, chp_final, version);
             }
             if (http_session->fflow && http_session->fflow->flow_prepared)
             {
                 finalizeFflow(http_session->fflow, http_session->app_type_flags,
                               (http_session->fflow->appId ? http_session->fflow->appId : chp_final), p);
-                _dpd.snortFree(http_session->fflow, sizeof(*http_session->fflow),
-                    PP_APP_ID, PP_MEM_CATEGORY_SESSION);
+                free(http_session->fflow);
                 http_session->fflow = NULL;
             }
             if (*version)
@@ -1881,7 +1620,7 @@ static inline void clearMiscHttpFlags(tAppIdData *session)
     }
 }
 
-STATIC INLINE int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID_SESSION_DIRECTION direction, HttpParsedHeaders *const headers, const tAppIdConfig *pConfig)
+STATIC inline int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID_SESSION_DIRECTION direction, HttpParsedHeaders *const headers, const tAppIdConfig *pConfig)
 {
 #define RESPONSE_CODE_LENGTH 3
     HeaderMatchedPatterns hmp;
@@ -1961,7 +1700,7 @@ STATIC INLINE int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID
     if (session->serviceAppId == APP_ID_NONE)
     {
         session->serviceAppId = APP_ID_HTTP;
-        if (appidStaticConfig->instance_id)
+        if (appidStaticConfig.instance_id)
             checkSandboxDetection(APP_ID_HTTP);
     }
 
@@ -1969,7 +1708,7 @@ STATIC INLINE int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID
         _dpd.logMsg("AppIdDbg %s chp_finished %d chp_hold_flow %d\n", app_id_debug_session, http_session->chp_finished, http_session->chp_hold_flow);
 
     if (!http_session->chp_finished || http_session->chp_hold_flow)
-        processCHP(session, &version, p, direction, pConfig);
+        processCHP(session, &version, p, pConfig);
 
     if (!http_session->skip_simple_detect)  // false unless a match happened with a call to processCHP().
     {
@@ -2018,7 +1757,7 @@ STATIC INLINE int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID
             {
                 if (app_id_debug_session_flag && payloadAppId > APP_ID_NONE && session->payloadAppId != payloadAppId)
                     _dpd.logMsg("AppIdDbg %s payload is webdav\n", app_id_debug_session);
-                setPayloadAppIdData(p, direction, session, APP_ID_WEBDAV, NULL);
+                setPayloadAppIdData(session, APP_ID_WEBDAV, NULL);
             }
 
             // Scan User-Agent for Browser types or Skype
@@ -2032,10 +1771,10 @@ STATIC INLINE int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID
                 identifyUserAgent((uint8_t *)useragent, http_session->useragent_buflen, &serviceAppId, &clientAppId, &version, &pConfig->detectorHttpConfig);
                 if (app_id_debug_session_flag && serviceAppId > APP_ID_NONE && serviceAppId != APP_ID_HTTP && session->serviceAppId != serviceAppId)
                     _dpd.logMsg("AppIdDbg %s User Agent is service %d\n", app_id_debug_session, serviceAppId);
-                setServiceAppIdData(p, direction, session, serviceAppId, NULL, NULL);
+                setServiceAppIdData(session, serviceAppId, NULL, NULL);
                 if (app_id_debug_session_flag && clientAppId > APP_ID_NONE && clientAppId != APP_ID_HTTP && session->clientAppId != clientAppId)
                     _dpd.logMsg("AppIdDbg %s User Agent is client %d\n", app_id_debug_session, clientAppId);
-                setClientAppIdData(p, direction, session, clientAppId, &version);
+                setClientAppIdData(session, clientAppId, &version);
                 session->scan_flags &= ~SCAN_HTTP_USER_AGENT_FLAG;
             }
 
@@ -2050,7 +1789,7 @@ STATIC INLINE int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID
                 payloadAppId = getAppidByViaPattern((uint8_t *)via, size, &version, &pConfig->detectorHttpConfig);
                 if (app_id_debug_session_flag && payloadAppId > APP_ID_NONE && session->payloadAppId != payloadAppId)
                     _dpd.logMsg("AppIdDbg %s VIA is payload %d\n", app_id_debug_session, payloadAppId);
-                setPayloadAppIdData(p, direction, session, payloadAppId, NULL);
+                setPayloadAppIdData(session, payloadAppId, NULL);
                 session->scan_flags &= ~SCAN_HTTP_VIA_FLAG;
             }
         }
@@ -2071,13 +1810,13 @@ STATIC INLINE int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID
                 {
                     if (app_id_debug_session_flag && clientAppId > APP_ID_NONE && clientAppId != APP_ID_HTTP && session->clientAppId != clientAppId)
                         _dpd.logMsg("AppIdDbg %s X is client %d\n", app_id_debug_session, appId);
-                    setClientAppIdData(p, direction, session, appId, &version);
+                    setClientAppIdData(session, appId, &version);
                 }
                 else
                 {
                     if (app_id_debug_session_flag && serviceAppId > APP_ID_NONE && serviceAppId != APP_ID_HTTP && session->serviceAppId != serviceAppId)
                         _dpd.logMsg("AppIdDbg %s X is service %d\n", app_id_debug_session, appId);
-                    setServiceAppIdData(p, direction, session, appId, NULL, &version);
+                    setServiceAppIdData(session, appId, NULL, &version);
                 }
                 session->scan_flags &= ~SCAN_HTTP_XWORKINGWITH_FLAG;
             }
@@ -2094,7 +1833,7 @@ STATIC INLINE int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID
             else payloadAppId = getAppidByContentType(p->payload + start, end - start, &pConfig->detectorHttpConfig);
             if (app_id_debug_session_flag && payloadAppId > APP_ID_NONE && session->payloadAppId != payloadAppId)
                 _dpd.logMsg("AppIdDbg %s Content-Type is payload %d\n", app_id_debug_session, payloadAppId);
-            setPayloadAppIdData(p, direction, session, payloadAppId, NULL);
+            setPayloadAppIdData(session, payloadAppId, NULL);
             session->scan_flags &= ~SCAN_HTTP_CONTENT_TYPE_FLAG;
         }
 
@@ -2112,18 +1851,18 @@ STATIC INLINE int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID
                 {
                     if (app_id_debug_session_flag && clientAppId > APP_ID_NONE && clientAppId != APP_ID_HTTP && session->clientAppId != clientAppId)
                         _dpd.logMsg("AppIdDbg %s URL is client %d\n", app_id_debug_session, clientAppId);
-                    setClientAppIdData(p, direction, session, clientAppId, NULL);
+                    setClientAppIdData(session, clientAppId, NULL);
                 }
                 if (session->serviceAppId <= APP_ID_NONE)
                 {
                     if (app_id_debug_session_flag && serviceAppId > APP_ID_NONE && serviceAppId != APP_ID_HTTP && session->serviceAppId != serviceAppId)
                         _dpd.logMsg("AppIdDbg %s URL is service %d\n", app_id_debug_session, serviceAppId);
-                    setServiceAppIdData(p, direction, session, serviceAppId, NULL, NULL);
+                    setServiceAppIdData(session, serviceAppId, NULL, NULL);
                 }
                 // DO overwrite a previously-set payload
                 if (app_id_debug_session_flag && payloadAppId > APP_ID_NONE && session->payloadAppId != payloadAppId)
                     _dpd.logMsg("AppIdDbg %s URL is payload %d\n", app_id_debug_session, payloadAppId);
-                setPayloadAppIdData(p, direction, session, payloadAppId, &version);
+                setPayloadAppIdData(session, payloadAppId, &version);
                 setReferredPayloadAppIdData(session, referredPayloadAppId);
             }
             session->scan_flags &= ~SCAN_HTTP_HOST_URL_FLAG;
@@ -2156,11 +1895,6 @@ STATIC INLINE int processHTTPPacket(SFSnortPacket *p, tAppIdData *session, APPID
         clearMiscHttpFlags(session);
     }  // end DON'T skip_simple_detect
 
-    if (version) // We allocated this, but nobody used!
-    {
-        free(version);
-        version = NULL;
-    }
     PREPROC_PROFILE_END(httpPerfStats);
     return 0;
 }
@@ -2173,28 +1907,14 @@ static inline void stopRnaServiceInspection(SFSnortPacket *p, tAppIdData* sessio
         ip = GET_DST_IP(p);
         session->service_ip = *ip;
         session->service_port = p->dst_port;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-        session->serviceAsId = p->pkt_header->address_space_id_dst;
-#endif
     }
     else
     {
         ip = GET_SRC_IP(p);
         session->service_ip = *ip;
         session->service_port = p->src_port;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-        session->serviceAsId = p->pkt_header->address_space_id_src;
-#endif
     }
     session->rnaServiceState = RNA_STATE_FINISHED;
-
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID)
-    session->carrierId = GET_SFOUTER_IPH_PROTOID(p, pkt_header);
-#endif
-
-    if ((TPIsAppIdAvailable(session->tpsession) || getAppIdFlag(session, APPID_SESSION_NO_TPI)) &&
-        session->payloadAppId == APP_ID_NONE)
-        session->payloadAppId = APP_ID_UNKNOWN;
     setAppIdFlag(session, APPID_SESSION_SERVICE_DETECTED);
     clearAppIdFlag(session, APPID_SESSION_CONTINUE);
 #ifdef DEBUG_FW_APPID
@@ -2206,29 +1926,20 @@ static inline void stopRnaServiceInspection(SFSnortPacket *p, tAppIdData* sessio
 #endif
 }
 
-// Mock (derived?) function for _dpd.streamAPI->is_session_decrytped().
-// It gets set at the beginning of fwAppIdSearch() in this file.
-// Note that _dpd.streamAPI->is_session_decrypted() gets called multiple times
-// in sfrna/firewall/src/spp_fw_engine.c.
-// change UNIT_TESTING and UNIT_TEST_FIRST_DECRYPTED_PACKET in appIdApi.h
-#ifdef UNIT_TEST_FIRST_DECRYPTED_PACKET
-bool is_session_decrypted_unit_test(void * ssn)
-{
-    tAppIdData * session=getAppIdData(ssn);
-    if (session && (session->session_packet_count >= UNIT_TEST_FIRST_DECRYPTED_PACKET))
-        return 1;
-    return 0;
-}
-#endif
-
 static inline bool isSslDecryptionEnabled(tAppIdData *session)
 {
     if (getAppIdFlag(session, APPID_SESSION_DECRYPTED))
         return 1;
+#ifdef UNIT_TESTING
+    if (session->session_packet_count >= 13)
+        return 1;
+    return 0;
+#else
     return _dpd.streamAPI->is_session_decrypted(session->ssn);
+#endif
 }
 
-static inline void checkRestartSSLDetection(tAppIdData *session)
+static inline void checkRestartAppDetection(tAppIdData *session)
 {
     if (getAppIdFlag(session, APPID_SESSION_DECRYPTED)) return;
     if (!isSslDecryptionEnabled(session)) return;
@@ -2258,83 +1969,10 @@ static inline void checkRestartSSLDetection(tAppIdData *session)
         // APPID_SESSION_ENCRYPTED is set upon receiving a command which upgrades the session to SSL.
         // Next packet after the command will have encrypted traffic.
         // In the case of a session which starts as SSL, current packet itself is encrypted. Set the special flag
-        // APPID_SESSION_APP_REINSPECT_SSL which allows reinspection of this packet.
+        // APPID_SESSION_APP_REINSPECT_SSL which allows reinspection of this pcaket.
         if (isSsl)
             setAppIdFlag(session, APPID_SESSION_APP_REINSPECT_SSL);
     }
-}
-
-static inline void checkRestartTunnelDetection(tAppIdData *session)
-{
-    if ((session->hsession && session->hsession->is_tunnel) ||
-        (session->tpPayloadAppId == APP_ID_HTTP_TUNNEL && !getAppIdFlag(session, APPID_SESSION_HTTP_TUNNEL)))
-    {
-        if (app_id_debug_session_flag)
-            _dpd.logMsg("AppIdDbg %s Found HTTP Tunnel, restarting app Detection\n", app_id_debug_session);
-
-        // Service
-        if (session->serviceAppId == session->portServiceAppId)
-            session->serviceAppId = APP_ID_NONE;
-        session->portServiceAppId = APP_ID_NONE;
-        if (session->serviceVendor)
-        {
-            free(session->serviceVendor);
-            session->serviceVendor = NULL;
-        }
-        if (session->serviceVersion)
-        {
-            free(session->serviceVersion);
-            session->serviceVersion = NULL;
-        }
-        IP_CLEAR(session->service_ip);
-        session->service_port = 0; 
-        session->rnaServiceState = RNA_STATE_NONE;
-        session->serviceData = NULL;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-        session->serviceAsId = 0xFF;
-#endif
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID)
-        session->carrierId = 0;
-#endif
-
-        AppIdFlowdataDeleteAllByMask(session, APPID_SESSION_DATA_SERVICE_MODSTATE_BIT);
-
-        // Client
-        session->rnaClientState = RNA_STATE_NONE;
-        session->clientData = NULL;
-        if (session->candidate_client_list)
-        {
-            sflist_free(session->candidate_client_list);
-            session->candidate_client_list = NULL;
-        }
-        session->num_candidate_clients_tried = 0;
-        AppIdFlowdataDeleteAllByMask(session, APPID_SESSION_DATA_CLIENT_MODSTATE_BIT);
-
-        session->init_tpPackets = 0;
-        session->resp_tpPackets = 0;
-
-        session->scan_flags &= ~SCAN_HTTP_HOST_URL_FLAG;
-        clearAppIdFlag(session, APPID_SESSION_SERVICE_DETECTED | APPID_SESSION_CLIENT_DETECTED
-                                | APPID_SESSION_HTTP_SESSION | APPID_SESSION_HTTP_CONNECT);
-        if (session->hsession && session->hsession->is_tunnel)
-        {
-            session->hsession->is_tunnel = false;
-            if (appidStaticConfig->http_tunnel_detect == HTTP_TUNNEL_DETECT_RESTART_AND_RESET && thirdparty_appid_module)
-            {
-                thirdparty_appid_module->session_delete(session->tpsession, 0);
-                session->tpsession = NULL;
-            }
-        }
-
-        setAppIdFlag(session, APPID_SESSION_HTTP_TUNNEL);
-    }
-    return;
-}
-
-static inline void checkRestartAppDetection(tAppIdData *session)
-{
-    checkRestartSSLDetection(session);
-    checkRestartTunnelDetection(session);
 }
 
 static inline void updateEncryptedAppId( tAppIdData *session, tAppId serviceAppId)
@@ -2368,7 +2006,6 @@ static inline void updateEncryptedAppId( tAppIdData *session, tAppId serviceAppI
             session->miscAppId = APP_ID_FTPSDATA;
             break;
         case APP_ID_FTP:
-	case APP_ID_FTP_CONTROL:
             session->miscAppId = APP_ID_FTPS;
             break;
         case APP_ID_TELNET:
@@ -2385,89 +2022,51 @@ static inline void updateEncryptedAppId( tAppIdData *session, tAppId serviceAppI
     }
 }
 
-/*
- * Desc: This function does AppId detection corresponding to the SSL params
- * The order of processing is:
- * Valid SNI:              SNI->first_SAN->CN->OU
- * No SNI/Mismatched SNI:  first_SAN->CN->OU
- */
-static int scanSslParamsLookupAppId(tAppIdData *session, const char *serverName,
-            bool isSniMismatch, const char *subjectAltName, const char *commonName,
-            const char *orgName, tAppId *clientAppId, tAppId *payloadAppId)
+static inline void ExamineSslMetadata(SFSnortPacket *p, tAppIdData *session, tAppIdConfig *pConfig)
 {
-    int ret = 0;
-
-    if ((session->scan_flags & SCAN_SSL_HOST_FLAG) && serverName && !isSniMismatch)
-    {
-        ret = ssl_scan_hostname((const uint8_t *)serverName, strlen(serverName),
-                clientAppId, payloadAppId, &pAppidActiveConfig->serviceSslConfig);
-        session->tsession->matched_tls_type = MATCHED_TLS_HOST; 
-        session->scan_flags &= ~SCAN_SSL_HOST_FLAG;
-    }
-
-    if (subjectAltName && (APP_ID_NONE == *clientAppId) && (APP_ID_NONE == *payloadAppId))
-    {
-        ret = ssl_scan_hostname((const uint8_t *)subjectAltName, strlen(subjectAltName),
-                clientAppId, payloadAppId, &pAppidActiveConfig->serviceSslConfig);
-        session->tsession->matched_tls_type = MATCHED_TLS_FIRST_SAN; 
-    }
-
-    if ((session->scan_flags & SCAN_SSL_CERTIFICATE_FLAG) && commonName &&
-            (APP_ID_NONE == *clientAppId) && (APP_ID_NONE == *payloadAppId))
-    {
-        ret = ssl_scan_cname((const uint8_t *)commonName, strlen(commonName),
-                clientAppId, payloadAppId, &pAppidActiveConfig->serviceSslConfig);
-        session->tsession->matched_tls_type = MATCHED_TLS_CNAME; 
-        session->scan_flags &= ~SCAN_SSL_CERTIFICATE_FLAG;
-    }
-
-    if (orgName && (APP_ID_NONE == *clientAppId) && (APP_ID_NONE == *payloadAppId))
-    {
-        ret = ssl_scan_cname((const uint8_t *)orgName, strlen(orgName),
-                clientAppId, payloadAppId, &pAppidActiveConfig->serviceSslConfig);
-        session->tsession->matched_tls_type = MATCHED_TLS_ORG_UNIT; 
-    }
-
-    if ((APP_ID_NONE == *clientAppId) && (APP_ID_NONE == *payloadAppId))
-        session->tsession->matched_tls_type = MATCHED_TLS_NONE; 
-
-    return ret;
-}
-
-static inline void ExamineSslMetadata(SFSnortPacket *p, APPID_SESSION_DIRECTION direction, tAppIdData *session, tAppIdConfig *pConfig)
-{
-    int ret = 0;
+    size_t size;
+    int ret;
     tAppId clientAppId = 0;
     tAppId payloadAppId = 0;
 
-    /* TLS params already scanned, skip scanning again */
-    if ((session->scan_flags & SCAN_CERTVIZ_ENABLED_FLAG))
-        return;
-
-    ret = scanSslParamsLookupAppId(session, (const char*)session->tsession->tls_host,
-            false, NULL, (const char*)session->tsession->tls_cname,
-            (const char*)session->tsession->tls_orgUnit, &clientAppId, &payloadAppId);
-
-    if (session->clientAppId == APP_ID_NONE ||
-            session->clientAppId == APP_ID_SSL_CLIENT)
-        setClientAppIdData(p, direction, session, clientAppId, NULL);
-    setPayloadAppIdData(p, direction, session, payloadAppId, NULL);
-    setSSLSquelch(p, ret, (ret == 1 ? payloadAppId : clientAppId));
-
+    if ((session->scan_flags & SCAN_SSL_HOST_FLAG) && session->tsession->tls_host)
+    {
+        size = strlen(session->tsession->tls_host);
+        if ((ret = ssl_scan_hostname((const u_int8_t *)session->tsession->tls_host, size, &clientAppId, &payloadAppId, &pConfig->serviceSslConfig)))
+        {
+            setClientAppIdData(session, clientAppId, NULL);
+            setPayloadAppIdData(session, payloadAppId, NULL);
+            setSSLSquelch(p, ret, (ret == 1 ? payloadAppId : clientAppId));
+        }
+        session->scan_flags &= ~SCAN_SSL_HOST_FLAG;
+        // ret = 0;
+    }
+    if (session->tsession->tls_cname)
+    {
+        size = strlen(session->tsession->tls_cname);
+        if ((ret = ssl_scan_cname((const u_int8_t *)session->tsession->tls_cname, size, &clientAppId, &payloadAppId, &pConfig->serviceSslConfig)))
+        {
+            setClientAppIdData(session, clientAppId, NULL);
+            setPayloadAppIdData(session, payloadAppId, NULL);
+            setSSLSquelch(p, ret, (ret == 1 ? payloadAppId : clientAppId));
+        }
+        free(session->tsession->tls_cname);
+        session->tsession->tls_cname = NULL;
+        // ret = 0;
+    }
     if (session->tsession->tls_orgUnit)
     {
+        size = strlen(session->tsession->tls_orgUnit);
+        if ((ret = ssl_scan_cname((const u_int8_t *)session->tsession->tls_orgUnit, size, &clientAppId, &payloadAppId, &pConfig->serviceSslConfig)))
+        {
+            setClientAppIdData(session, clientAppId, NULL);
+            setPayloadAppIdData(session, payloadAppId, NULL);
+            setSSLSquelch(p, ret, (ret == 1 ? payloadAppId : clientAppId));
+        }
         free(session->tsession->tls_orgUnit);
         session->tsession->tls_orgUnit = NULL;
+        // ret = 0;
     }
-
-    if (session->tsession->tls_handshake_done &&
-            session->payloadAppId == APP_ID_NONE)
-    {
-        if (app_id_debug_session_flag)
-            _dpd.logMsg("AppIdDbg %s End of SSL/TLS handshake detected with no payloadAppId, so setting to unknown\n", app_id_debug_session);
-        session->payloadAppId = APP_ID_UNKNOWN;
-    }
-
 }
 
 static inline int RunClientDetectors(tAppIdData *session,
@@ -2476,57 +2075,52 @@ static inline int RunClientDetectors(tAppIdData *session,
                               tAppIdConfig *pConfig)
 {
     int ret = CLIENT_APP_INPROCESS;
-    const struct RNAClientAppModule *tmpClientData = session->clientData;
 
-    if (tmpClientData != NULL)
+    if (session->clientData != NULL)
     {
-        ret = tmpClientData->validate(p->payload, p->payload_size, direction,
-                                            session, p, tmpClientData->userData, pConfig);
+        ret = session->clientData->validate(p->payload, p->payload_size, direction,
+                                            session, p, session->clientData->userData, pConfig);
         if (app_id_debug_session_flag)
             _dpd.logMsg("AppIdDbg %s %s client detector returned %d\n", app_id_debug_session,
-                        tmpClientData->name ? tmpClientData->name:"UNKNOWN", ret);
+                        session->clientData->name ? session->clientData->name:"UNKNOWN", ret);
     }
-    else
+    else if (    (session->candidate_client_list != NULL)
+              && (sflist_count(session->candidate_client_list) > 0) )
     {
-        SF_LIST * tmpCandidateClientList = session->candidate_client_list;
-        if (    (tmpCandidateClientList != NULL)
-                  && (sflist_count(tmpCandidateClientList) > 0) )
+        SF_LNODE *node;
+        tRNAClientAppModule *client;
+
+        ret = CLIENT_APP_INPROCESS;
+        node = sflist_first_node(session->candidate_client_list);
+        while (node != NULL)
         {
-            SF_LNODE *node;
-            tRNAClientAppModule *client;
+            int result;
+            SF_LNODE *node_tmp;
 
-            ret = CLIENT_APP_INPROCESS;
-            node = sflist_first_node(tmpCandidateClientList);
-            while (node != NULL)
+            client = (tRNAClientAppModule*)SFLIST_NODE_TO_DATA(node);
+            result = client->validate(p->payload, p->payload_size, direction,
+                                      session, p, client->userData, pConfig);
+            if (app_id_debug_session_flag)
+                _dpd.logMsg("AppIdDbg %s %s client detector returned %d\n", app_id_debug_session,
+                            client->name ? client->name:"UNKNOWN", result);
+
+            node_tmp = node;
+            node = sflist_next_node(session->candidate_client_list);
+            if (result == CLIENT_APP_SUCCESS)
             {
-                int validator_result;
-                SF_LNODE *node_tmp;
-
-                client = (tRNAClientAppModule*)SFLIST_NODE_TO_DATA(node);
-                validator_result = client->validate(p->payload, p->payload_size, direction,
-                                          session, p, client->userData, pConfig);
-                if (app_id_debug_session_flag)
-                    _dpd.logMsg("AppIdDbg %s %s client detector returned %d\n", app_id_debug_session,
-                                client->name ? client->name:"UNKNOWN", validator_result);
-
-                if (validator_result == CLIENT_APP_SUCCESS)
-                {
-                    ret = CLIENT_APP_SUCCESS;
-                    session->clientData = client;
-                    sflist_free(tmpCandidateClientList);
-                    session->candidate_client_list = NULL;
-                    break;    /* done */
-                }
-
-                node_tmp = node;
-                node = sflist_next_node(tmpCandidateClientList);
-                if (validator_result != CLIENT_APP_INPROCESS)    /* fail */
-                {
-                    sflist_remove_node(tmpCandidateClientList, node_tmp);
-                }
+                ret = CLIENT_APP_SUCCESS;
+                session->clientData = client;
+                sflist_free(session->candidate_client_list);
+                session->candidate_client_list = NULL;
+                break;    /* done */
+            }
+            else if (result != CLIENT_APP_INPROCESS)    /* fail */
+            {
+                sflist_remove_node(session->candidate_client_list, node_tmp);
             }
         }
     }
+
     return ret;
 }
 
@@ -2579,10 +2173,7 @@ static inline void synchAppIdWithSnortId(tAppId newAppId, SFSnortPacket *p, tApp
                 if (app_id_debug_session_flag)
                     if (tempSnortId == snortId_for_http2)
                         _dpd.logMsg("AppIdDbg %s Telling Snort that it's HTTP/2\n", app_id_debug_session);
-#ifdef TARGET_BASED
                 _dpd.sessionAPI->set_application_protocol_id(p->stream_session, tempSnortId);
-#endif
-                p->application_protocol_ordinal = tempSnortId;
             }
         }
     }
@@ -2590,7 +2181,7 @@ static inline void synchAppIdWithSnortId(tAppId newAppId, SFSnortPacket *p, tApp
 
 static inline void checkTerminateTpModule(uint16_t tpPktCount, tAppIdData *session)
 {
-    if ((tpPktCount >= appidStaticConfig->max_tp_flow_depth) ||
+    if ((tpPktCount >= appidStaticConfig.max_tp_flow_depth) ||
         (getAppIdFlag(session, APPID_SESSION_HTTP_SESSION | APPID_SESSION_APP_REINSPECT) ==
                 (APPID_SESSION_HTTP_SESSION | APPID_SESSION_APP_REINSPECT) &&
          session->hsession && session->hsession->uri &&
@@ -2598,7 +2189,7 @@ static inline void checkTerminateTpModule(uint16_t tpPktCount, tAppIdData *sessi
     {
         if (session->tpAppId == APP_ID_NONE)
             session->tpAppId = APP_ID_UNKNOWN;
-        if (session->rnaServiceState == RNA_STATE_FINISHED && session->payloadAppId == APP_ID_NONE)
+        if (session->payloadAppId == APP_ID_NONE)
             session->payloadAppId = APP_ID_UNKNOWN;
         if (thirdparty_appid_module)
             thirdparty_appid_module->session_delete(session->tpsession, 1);
@@ -2652,11 +2243,6 @@ if (app_id_debug_flag) {
             }
 #endif
             free(tweakedPayload); tweakedPayload = NULL;
-        }
-        else
-        {
-            DynamicPreprocessorFatalMessage("debug_printSnortPacket: "
-                    "failed to allocate memory for tweakedPayload\n");
         }
     }
     if (p->stream_session)
@@ -2772,7 +2358,7 @@ static inline APPID_SESSION_DIRECTION getIP6_direction(SFSnortPacket *p)
     return APP_ID_FROM_RESPONDER;
 }
 
-static inline int appDetermineProtocol(SFSnortPacket *p, tAppIdData *session, uint8_t *protocolp, uint8_t *outer_protocol, APPID_SESSION_DIRECTION *directionp)
+static inline int appDetermineProtocol(SFSnortPacket *p, tAppIdData *session, uint8_t *protocolp, APPID_SESSION_DIRECTION *directionp)
 {
     // 'session' pointer may be NULL. In which case the packet examination is required.
     // But if 'session' is not NULL we use values saved from the initial creation
@@ -2826,29 +2412,15 @@ static inline int appDetermineProtocol(SFSnortPacket *p, tAppIdData *session, ui
             *protocolp = IPPROTO_UDP;
             *directionp = (_dpd.sessionAPI->get_packet_direction(p) & FLAG_FROM_CLIENT) ? APP_ID_FROM_INITIATOR : APP_ID_FROM_RESPONDER;
         }
-        else if (IsIP(p))
+        else if (p->ip4h)
         {
-            *protocolp = GET_IPH_PROTO(p);
-            if (p->outer_iph_api)
-            {
-                IP4Hdr *save_ip4h = p->ip4h;
-                IP6Hdr *save_ip6h = p->ip6h;
-
-                p->ip4h = &p->outer_ip4h;
-                p->ip6h = &p->outer_ip6h;
-
-                *outer_protocol = p->outer_iph_api->iph_ret_proto(p);
-
-                p->ip4h = save_ip4h;
-                p->ip6h = save_ip6h;
-            }
-
-            if (IS_IP4(p) && p->ip4h)
-                *directionp = getIP4_direction(p);
-            else if (p->ip6h)
-                *directionp = getIP6_direction(p);
-            else
-                *directionp = APP_ID_FROM_RESPONDER;
+            *protocolp = p->ip4h->ip_proto;
+            *directionp = getIP4_direction(p); // non-TCP/UDP checks
+        }
+        else if (p->ip6h)
+        {
+            *protocolp = p->ip6h->next;
+            *directionp = getIP6_direction(p); // non-TCP/UDP checks
         }
         else
         {
@@ -2861,546 +2433,43 @@ static inline int appDetermineProtocol(SFSnortPacket *p, tAppIdData *session, ui
 
 static inline bool checkThirdPartyReinspect(const SFSnortPacket* p, tAppIdData* session)
 {
-    return getAppIdFlag(session, APPID_SESSION_HTTP_SESSION) && !getAppIdFlag(session, APPID_SESSION_NO_TPI) && TPIsAppIdDone(session->tpsession) && p->payload_size;
-}
-
-static inline int getIpPortFromHttpTunnel(char *url, int url_len, tunnelDest **tunDest)
-{
-    char *host = NULL, *host_start, *host_end, *url_end;
-    char *portStr = NULL;
-    uint16_t port = 0;
-    int isIPv6 = 0, family;
-
-    if (url_len <= 0 || !url || !tunDest)
-    {
-        return 1;
-    }
-
-    url_end = url + url_len - 1;
-    host_start = url;
-
-    if (url[0] == '[')
-    {
-        // IPv6 literal
-        isIPv6 = 1;
-        portStr = strchr(url, ']');
-        if (portStr && portStr < url_end)
-        {
-            if (*(++portStr) != ':')
-            {
-                portStr = NULL;
-            }
-        }
-    }
-    else if(isdigit(url[0])) // Checking the first character for a possible domain name.
-    {
-        portStr = strrchr(url, ':');
-    }
-    else
-    {
-        return 1;
-    }
-
-    if (portStr && portStr < url_end )
-    {
-        host_end = portStr;
-        if (*(++portStr) != '\0')
-        {
-            char *end = NULL;
-            long ret = strtol(portStr, &end, 10);
-            if (end != portStr && *end == '\0' && ret >= 1 && ret <= PORT_MAX)
-            {
-                port = (uint16_t)ret;
-            }
-        }
-    }
-
-    if (port)
-    {
-        if (isIPv6)
-        {
-            // IPv6 is enclosed in square braces. Adjusting the pointers.
-            host_start++;
-            host_end--;
-        }
-
-        if (host_start <= host_end)
-        {
-            char tmp = *host_end;
-            *host_end = '\0';
-            host = strdup(host_start);
-            *host_end = tmp;
-        }
-        else
-            return 1;
-    }
-
-    if (host)
-    {
-        tunnelDest *tDest = _dpd.snortAlloc(1, sizeof(*tDest), PP_APP_ID,
-                PP_MEM_CATEGORY_SESSION);
-        if (!tDest)
-        {
-            _dpd.errMsg("AppId: Unable to allocate memory for HTTP tunnel information\n");
-            free(host);
-            return 1;
-        }
-
-        if (!isIPv6)
-        {
-            if (inet_pton(AF_INET, host, &(tDest->ip).ip.s6_addr32[3]) <= 0)
-            {
-                free(host);
-                _dpd.snortFree(tDest, sizeof(*tDest), PP_APP_ID, PP_MEM_CATEGORY_SESSION);
-                return 1;
-            }
-            (tDest->ip).ip.s6_addr32[0] = (tDest->ip).ip.s6_addr32[1] =  0;
-            (tDest->ip).ip.s6_addr32[2] = ntohl(0x0000ffff);
-
-            family = AF_INET;
-        }
-        else
-        {
-            if (inet_pton(AF_INET6, host, &(tDest->ip).ip) <= 0)
-            {
-                free(host);
-                _dpd.snortFree(tDest, sizeof(*tDest), PP_APP_ID, PP_MEM_CATEGORY_SESSION);
-                return 1;
-            }
-            family = AF_INET6;
-        }
-
-        (tDest->ip).family = family;
-        tDest->port = port;
-
-        *tunDest = tDest;
-
-        free(host);
-    }
-    else
-    {
-        return 1;
-    }
-
-    return 0;
-}
-
-static int checkHostCache(SFSnortPacket *p, tAppIdData *session, sfaddr_t *ip, uint16_t port, uint8_t protocol, tAppIdConfig *pConfig)
-{
-    bool checkStatic = false, checkDynamic = false;
-    tHostPortVal *hv = NULL;
-
-    if (!(session->scan_flags & SCAN_HOST_PORT_FLAG))
-        checkStatic = true;
-
-    if (isHostCacheUpdated(session->hostCacheVersion))
-    {
-        if ((session->session_packet_count % appidStaticConfig->host_port_app_cache_lookup_interval == 0) &&
-             session->session_packet_count <= appidStaticConfig->host_port_app_cache_lookup_range &&
-             appidStaticConfig->is_host_port_app_cache_runtime)
-            checkDynamic = true;
-    }
-
-    if (!(checkStatic || checkDynamic))
-        return 0;
-
-    if (checkStatic)
-    {
-        hv = hostPortAppCacheFind(ip, port, protocol, pConfig);
-        session->scan_flags |= SCAN_HOST_PORT_FLAG;
-    }
-
-    if (!hv && checkDynamic)
-    {
-        hv = hostPortAppCacheDynamicFind(ip, port, protocol);
-        updateHostCacheVersion(&(session->hostCacheVersion));
-    }
-
-    if (hv)
-    {
-        switch (hv->type)
-        {
-            case APP_ID_TYPE_SERVICE:
-                session->serviceAppId = hv->appId;
-                synchAppIdWithSnortId(hv->appId, p, session, pConfig);
-                session->rnaServiceState = RNA_STATE_FINISHED;
-                session->rnaClientState = RNA_STATE_FINISHED;
-                setAppIdFlag(session, APPID_SESSION_SERVICE_DETECTED);
-                if (thirdparty_appid_module)
-                    thirdparty_appid_module->session_delete(session->tpsession, 1);
-		if (session->payloadAppId == APP_ID_NONE)
-                    session->payloadAppId = APP_ID_UNKNOWN;
-            case APP_ID_TYPE_CLIENT:
-                session->clientAppId = hv->appId;
-                session->rnaClientState = RNA_STATE_FINISHED;
-                break;
-            case APP_ID_TYPE_PAYLOAD:
-                session->payloadAppId = hv->appId;
-                break;
-            default:
-                break;
-        }
-        setAppIdFlag(session, APPID_SESSION_HOST_CACHE_MATCHED);
-        return 1;
-    }
-    return 0;
-}
-
-static inline bool isCheckHostCacheValid(tAppIdData* session, tAppId serviceAppId, tAppId clientAppId, tAppId payloadAppId, tAppId miscAppId)
-{
-    bool isPayloadClientNone = (payloadAppId <= APP_ID_NONE && clientAppId <= APP_ID_NONE);
-
-    bool isAppIdNone = isPayloadClientNone && (serviceAppId <= APP_ID_NONE || serviceAppId == APP_ID_UNKNOWN_UI ||
-                        (appidStaticConfig->recheck_for_portservice_appid && serviceAppId == session->portServiceAppId));
-
-    bool isSslNone = appidStaticConfig->check_host_cache_unknown_ssl && getAppIdFlag(session, APPID_SESSION_SSL_SESSION) &&
-                          !(session->tsession && session->tsession->tls_host && session->tsession->tls_cname);
-
-    if(isAppIdNone || isSslNone || appidStaticConfig->check_host_port_app_cache)
-    {
-        return true;
-    }
-    return false;
+    return p->payload_size && !getAppIdFlag(session, APPID_SESSION_NO_TPI) && getAppIdFlag(session, APPID_SESSION_HTTP_SESSION) && TPIsAppIdDone(session->tpsession);
 }
 
 void fwAppIdInit(void)
 {
     /* init globals for snortId compares etc. */
-#ifdef TARGET_BASED
     snortId_for_unsynchronized = _dpd.addProtocolReference("unsynchronized");
     snortId_for_ftp_data = _dpd.findProtocolReference("ftp-data");
     snortId_for_http2    = _dpd.findProtocolReference("http2");
-#endif
     snortInstance = _dpd.getSnortInstance();
-}
-
-static inline tAppId processThirdParty(SFSnortPacket* p, tAppIdData* session, APPID_SESSION_DIRECTION direction, uint8_t protocol, bool* isTpAppidDiscoveryDone,
-                                       tAppIdConfig *pConfig)
-{
-    tAppId tpAppId = session->tpAppId;
-    int tp_confidence;
-    tAppId* tp_proto_list;
-    ThirdPartyAppIDAttributeData* tp_attribute_data;
-    sfaddr_t *ip;
-
-    /*** Start of third-party processing. ***/
-    PROFILE_VARS;
-    PREPROC_PROFILE_START(tpPerfStats);
-    if (p->payload_size || appidStaticConfig->tp_allow_probes)
-    {
-        //restart inspection by 3rd party
-        if (!session->tpReinspectByInitiator && (direction == APP_ID_FROM_INITIATOR) && checkThirdPartyReinspect(p, session))
-        {
-            session->tpReinspectByInitiator = 1;     //once per request
-            setAppIdFlag(session, APPID_SESSION_APP_REINSPECT);
-            if (app_id_debug_session_flag)
-                _dpd.logMsg("AppIdDbg %s 3rd party allow reinspect http\n", app_id_debug_session);
-            session->init_tpPackets = 0;
-            session->resp_tpPackets = 0;
-            appHttpFieldClear(session->hsession);
-        }
-
-        if (!isTPProcessingDone(session))
-        {
-            if (protocol != IPPROTO_TCP || (p->flags & FLAG_STREAM_ORDER_OK) || appidStaticConfig->tp_allow_probes)
-            {
-                PREPROC_PROFILE_START(tpLibPerfStats);
-                if (!session->tpsession)
-                {
-                    if (!(session->tpsession = thirdparty_appid_module->session_create()))
-                        DynamicPreprocessorFatalMessage("Could not allocate tAppIdData->tpsession data");
-                }
-                printSnortPacket(p); // debug output of packet content
-                thirdparty_appid_module->session_process(session->tpsession, p, direction,
-                                                         &tpAppId, &tp_confidence, &tp_proto_list, &tp_attribute_data);
-                PREPROC_PROFILE_END(tpLibPerfStats);
-
-                // First SSL decrypted packet is now being inspected. Reset the flag so that SSL decrypted traffic
-                // gets processed like regular traffic from next packet onwards
-                if (getAppIdFlag(session, APPID_SESSION_APP_REINSPECT_SSL))
-                    clearAppIdFlag(session, APPID_SESSION_APP_REINSPECT_SSL);
-
-                *isTpAppidDiscoveryDone = true;
-
-                if (thirdparty_appid_module->session_state_get(session->tpsession) == TP_STATE_CLASSIFIED)
-                    clearAppIdFlag(session, APPID_SESSION_APP_REINSPECT);
-
-                if (app_id_debug_session_flag)
-                    _dpd.logMsg("AppIdDbg %s 3rd party returned %d\n", app_id_debug_session, tpAppId);
-#ifdef DEBUG_FW_APPID
-#if defined(DEBUG_FW_APPID_PORT) && DEBUG_FW_APPID_PORT
-                if (p->dst_port == DEBUG_FW_APPID_PORT || p->src_port == DEBUG_FW_APPID_PORT)
-#endif
-                    fprintf(SF_DEBUG_FILE, "%u -> %u %u 3rd party returned %d\n",
-                            (unsigned)p->src_port, (unsigned)p->dst_port, (unsigned)protocol, tpAppId);
-#endif
-
-                // For now, third party can detect HTTP/2 (w/o metadata) for
-                // some cases.  Treat it like HTTP w/ is_http2 flag set.
-                if ((tpAppId == APP_ID_HTTP2) && (tp_confidence == 100))
-                {
-                    if (app_id_debug_session_flag)
-                        _dpd.logMsg("AppIdDbg %s 3rd party saw HTTP/2\n", app_id_debug_session);
-                    tpAppId = APP_ID_HTTP;
-                    session->is_http2 = true;
-                }
-
-                // if the third-party appId must be treated as a client, do it now
-                uint32_t entryFlags = appInfoEntryFlags(tpAppId, pConfig);
-                if (entryFlags & APPINFO_FLAG_TP_CLIENT)
-                    session->clientAppId = tpAppId;
-
-                ProcessThirdPartyResults(p, direction, session, tp_confidence, tp_proto_list, tp_attribute_data);
-
-                if ((entryFlags & APPINFO_FLAG_SSL_SQUELCH) &&
-                    getAppIdFlag(session, APPID_SESSION_SSL_SESSION) &&
-                    !(session->scan_flags & SCAN_SSL_HOST_FLAG))
-                {
-                    if (!(session->scan_flags & SCAN_SPOOFED_SNI_FLAG))
-                    {
-                        setSSLSquelch(p, 1, tpAppId);
-                    }
-                    else
-                    {
-                        if (app_id_debug_session_flag)
-                            _dpd.logMsg("AppIdDbg %s Ignored 3rd party returned %d, SNI is spoofed\n",
-                                app_id_debug_session, tpAppId);
-                    }
-                }
-
-                if (entryFlags & APPINFO_FLAG_IGNORE)
-                {
-                    if (app_id_debug_session_flag)
-                        _dpd.logMsg("AppIdDbg %s 3rd party ignored\n", app_id_debug_session);
-                    if (getAppIdFlag(session, APPID_SESSION_HTTP_SESSION))
-                        tpAppId = APP_ID_HTTP;
-                    else if(getAppIdFlag(session, APPID_SESSION_SSL_SESSION))
-                        tpAppId = APP_ID_SSL;
-                    else
-                        tpAppId = APP_ID_NONE;
-                }
-            }
-            else
-            {
-                tpAppId = APP_ID_NONE;
-#ifdef DEBUG_FW_APPID
-#if defined(DEBUG_FW_APPID_PORT) && DEBUG_FW_APPID_PORT
-                if (p->dst_port == DEBUG_FW_APPID_PORT || p->src_port == DEBUG_FW_APPID_PORT)
-#endif
-                    fprintf(SF_DEBUG_FILE, "%u -> %u %u Skipping ooo\n",
-                            (unsigned)p->src_port, (unsigned)p->dst_port, (unsigned)protocol);
-#endif
-            }
-
-            if (thirdparty_appid_module->session_state_get(session->tpsession) == TP_STATE_MONITORING)
-            {
-                thirdparty_appid_module->disable_flags(session->tpsession, TP_SESSION_FLAG_ATTRIBUTE | TP_SESSION_FLAG_TUNNELING | TP_SESSION_FLAG_FUTUREFLOW);
-            }
-#ifdef TARGET_BASED
-            if(tpAppId == APP_ID_SSL && (_dpd.sessionAPI->get_application_protocol_id(p->stream_session) == snortId_for_ftp_data))
-            {
-                //  If we see SSL on an FTP data channel set tpAppId back
-                //  to APP_ID_NONE so the FTP preprocessor picks up the flow.
-                tpAppId = APP_ID_NONE;
-            }
-#endif
-            if (tpAppId > APP_ID_NONE && (!getAppIdFlag(session, APPID_SESSION_APP_REINSPECT) || session->payloadAppId > APP_ID_NONE))
-            {
-#ifdef TARGET_BASED
-                tAppId snortAppId;
-#endif
-
-                // if the packet is HTTP, then search for via pattern
-                if (getAppIdFlag(session, APPID_SESSION_HTTP_SESSION) && session->hsession)
-                {
-#ifdef TARGET_BASED
-                    snortAppId = APP_ID_HTTP;
-#endif
-                    //payload should never be APP_ID_HTTP
-                    if (tpAppId != APP_ID_HTTP)
-                        setTPPayloadAppIdData(p, direction, session, tpAppId);
-
-#ifdef DEBUG_FW_APPID
-#if defined(DEBUG_FW_APPID_PORT) && DEBUG_FW_APPID_PORT
-                    if (p->dst_port == DEBUG_FW_APPID_PORT || p->src_port == DEBUG_FW_APPID_PORT)
-#endif
-                        fprintf(SF_DEBUG_FILE, "%u -> %u %u tp identified http payload %d\n",
-                                (unsigned)p->src_port, (unsigned)p->dst_port, (unsigned)protocol, tpAppId);
-#endif
-
-                    session->tpAppId = APP_ID_HTTP;
-
-                    processHTTPPacket(p, session, direction, NULL, pConfig);
-
-                    if (TPIsAppIdAvailable(session->tpsession) && session->tpAppId == APP_ID_HTTP
-                                                        && !getAppIdFlag(session, APPID_SESSION_APP_REINSPECT))
-                    {
-                        session->rnaClientState = RNA_STATE_FINISHED;
-                        setAppIdFlag(session, APPID_SESSION_CLIENT_DETECTED | APPID_SESSION_SERVICE_DETECTED);
-                        session->rnaServiceState = RNA_STATE_FINISHED;
-                        clearAppIdFlag(session, APPID_SESSION_CONTINUE);
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID)
-                        session->carrierId = GET_SFOUTER_IPH_PROTOID(p, pkt_header);
-#endif
-                        if (direction == APP_ID_FROM_INITIATOR)
-                        {
-                            ip = GET_DST_IP(p);
-                            session->service_ip = *ip;
-                            session->service_port = p->dst_port;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                            session->serviceAsId = p->pkt_header->address_space_id_dst;
-#endif
-                        }
-                        else
-                        {
-                            ip = GET_SRC_IP(p);
-                            session->service_ip = *ip;
-                            session->service_port = p->src_port;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                            session->serviceAsId = p->pkt_header->address_space_id_src;
-#endif
-                        }
-                    }
-                }
-                else if (getAppIdFlag(session, APPID_SESSION_SSL_SESSION) && session->tsession)
-                {
-                    ExamineSslMetadata(p, direction, session, pConfig);
-
-                    uint16_t serverPort;
-                    tAppId portAppId;
-
-                    serverPort = (direction == APP_ID_FROM_INITIATOR)? p->dst_port:p->src_port;
-
-                    portAppId = getSslServiceAppId(serverPort);
-                    if (tpAppId == APP_ID_SSL )
-                    {
-                        tpAppId = portAppId;
-
-                        //SSL policy needs to determine IMAPS/POP3S etc before appId sees first server packet
-                        session->portServiceAppId = portAppId;
-
-                        if (app_id_debug_session_flag)
-                            _dpd.logMsg("AppIdDbg %s SSL is service %d, portServiceAppId %d\n",
-                                    app_id_debug_session, tpAppId, session->portServiceAppId);
-                    }
-                    else
-                    {
-                        if (!(session->scan_flags & SCAN_SPOOFED_SNI_FLAG))
-                        {
-                            setTPPayloadAppIdData(p, direction, session, tpAppId);
-                        }
-                        else
-                        {
-                            if (app_id_debug_session_flag)
-                                _dpd.logMsg("AppIdDbg %s Ignoring 3rd party returned %d, SNI is spoofed\n",
-                                    app_id_debug_session, tpAppId);
-                        }
-                        tpAppId = portAppId;
-                        if (app_id_debug_session_flag)
-                            _dpd.logMsg("AppIdDbg %s SSL is %d\n", app_id_debug_session, tpAppId);
-                    }
-		    setTPAppIdData(p, direction, session, tpAppId);
-#ifdef TARGET_BASED
-                    snortAppId = APP_ID_SSL;
-#endif
-
-#ifdef DEBUG_FW_APPID
-#if defined(DEBUG_FW_APPID_PORT) && DEBUG_FW_APPID_PORT
-                    if (p->dst_port == DEBUG_FW_APPID_PORT || p->src_port == DEBUG_FW_APPID_PORT)
-#endif
-                        fprintf(SF_DEBUG_FILE, "%u -> %u %u tp identified ssl service %d\n",
-                                (unsigned)p->src_port, (unsigned)p->dst_port, (unsigned)protocol, tpAppId);
-#endif
-                }
-                else
-                {
-                    //for non-http protocols, tp id is treated like serviceId
-
-#ifdef TARGET_BASED
-                    snortAppId = tpAppId;
-#endif
-
-#ifdef DEBUG_FW_APPID
-#if defined(DEBUG_FW_APPID_PORT) && DEBUG_FW_APPID_PORT
-                    if (p->dst_port == DEBUG_FW_APPID_PORT || p->src_port == DEBUG_FW_APPID_PORT)
-#endif
-                        fprintf(SF_DEBUG_FILE, "%u -> %u %u tp identified non-http service %d\n",
-                                (unsigned)p->src_port, (unsigned)p->dst_port, (unsigned)protocol, tpAppId);
-#endif
-                    setTPAppIdData(p, direction, session, tpAppId);
-                }
-
-#ifdef TARGET_BASED
-                synchAppIdWithSnortId(snortAppId, p, session, pConfig);
-#endif
-            }
-            else
-            {
-                if ((session->serviceAppId != APP_ID_ENIP && session->serviceAppId != APP_ID_CIP) &&
-                   (protocol != IPPROTO_TCP || (p->flags & (FLAG_STREAM_ORDER_OK | FLAG_STREAM_ORDER_BAD))))
-                {
-                    if (direction == APP_ID_FROM_INITIATOR)
-                    {
-                        session->init_tpPackets++;
-                        checkTerminateTpModule(session->init_tpPackets, session);
-                    }
-                    else
-                    {
-                        session->resp_tpPackets++;
-                        checkTerminateTpModule(session->resp_tpPackets, session);
-                    }
-                }
-            }
-        }
-
-        else if (session->hsession && (direction == APP_ID_FROM_RESPONDER) &&
-            getAppIdFlag(session, APPID_SESSION_HTTP_CONNECT))
-        {
-            if ((p->payload_size >= 13) && !strncasecmp((char *)p->payload, "HTTP/1.1 200 ", 13))
-                session->hsession->is_tunnel = true;
-        }
-        if (session->tpReinspectByInitiator && checkThirdPartyReinspect(p, session))
-        {
-            if (*isTpAppidDiscoveryDone)
-                clearAppIdFlag(session, APPID_SESSION_APP_REINSPECT);
-            if (direction == APP_ID_FROM_RESPONDER)
-                session->tpReinspectByInitiator = 0; //toggle at OK response
-        }
-    }
-    PREPROC_PROFILE_END(tpPerfStats);
-    /*** End of third-party processing. ***/
-
-    return tpAppId;
 }
 
 void fwAppIdSearch(SFSnortPacket *p)
 {
     tAppIdData *session;
-    uint8_t protocol, outer_protocol = 0;
+    uint8_t protocol;
     APPID_SESSION_DIRECTION direction;
     tAppId tpAppId = 0;
     tAppId serviceAppId = 0;
     tAppId clientAppId = 0;
     tAppId payloadAppId = 0;
-    tAppId miscAppId = 0;
     bool isTpAppidDiscoveryDone = false;
     uint64_t flow_flags;
     sfaddr_t *ip;
     uint16_t port;
     size_t size;
+    int tp_confidence;
+    tAppId* tp_proto_list;
+    ThirdPartyAppIDAttributeData* tp_attribute_data;
 #ifdef TARGET_BASED
     AppInfoTableEntry *entry;
 #endif
     tAppIdConfig *pConfig = appIdActiveConfigGet();
 
-#ifdef UNIT_TEST_FIRST_DECRYPTED_PACKET
-    if(app_id_raw_packet_count==0)
-        _dpd.streamAPI->is_session_decrypted=is_session_decrypted_unit_test;
-#endif
-
     app_id_raw_packet_count++;
 
-    if (!p->stream_session || (p->payload_size && !p->payload))
+    if (!p->stream_session)
     {
         app_id_ignored_packet_count++;
         return;
@@ -3409,33 +2478,12 @@ void fwAppIdSearch(SFSnortPacket *p)
     SetPacketRealTime(p->pkt_header->ts.tv_sec);
 
     session = appSharedGetData(p);
-    if (!appDetermineProtocol(p, session, &protocol, &outer_protocol, &direction))
+    if (!appDetermineProtocol(p, session, &protocol, &direction))
     {
         // unsupported protocol or other ignore
         app_id_ignored_packet_count++;
         return;
     }
-
-    if (pConfig->debugHostIp)
-    {
-        AppIdDebugHostInfo.session = session;
-        AppIdDebugHostInfo.protocol = protocol;
-        AppIdDebugHostInfo.direction = direction;
-        if (session)
-        {
-            memcpy(&AppIdDebugHostInfo.initiatorIp, &session->common.initiator_ip, sizeof(session->common.initiator_ip));
-            AppIdDebugHostInfo.initiatorPort = session->common.initiator_port;
-            AppIdDebugHostInfo.family = sfaddr_family(GET_SRC_IP(p));
-        }
-        else
-        {
-            memset(&AppIdDebugHostInfo.initiatorIp, 0, sizeof(session->common.initiator_ip));
-            AppIdDebugHostInfo.initiatorPort = 0;
-            AppIdDebugHostInfo.family = AF_INET;
-        }
-        AppIdDebugHostInfo.monitorType = APPID_DEBUG_HOST_NOT_MONITORED;
-    }
-
     app_id_debug_session_flag = fwAppIdDebugCheck(p->stream_session, session, app_id_debug_flag,
             &app_id_debug_info, app_id_debug_session, direction);
 
@@ -3453,33 +2501,7 @@ void fwAppIdSearch(SFSnortPacket *p)
         dipstr[0] = 0;
         ip = GET_DST_IP(p);
         inet_ntop(sfaddr_family(ip), (void *)sfaddr_get_ptr(ip), dipstr, sizeof(dipstr));
-
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID)
-        uint32_t cid = GET_SFOUTER_IPH_PROTOID(p, pkt_header);
-
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-        uint16_t sAsId = p->pkt_header->address_space_id_src;
-        uint16_t dAsId = p->pkt_header->address_space_id_dst;
-
-        fprintf(SF_DEBUG_FILE, "%s-%u -> %s-%u  AS %u-%u CID %u %u\n", sipstr,
-                (unsigned)p->src_port, dipstr, (unsigned)p->dst_port,
-                sAsId, dAsId, (unsigned)cid, (unsigned)protocol);
-#else
-        fprintf(SF_DEBUG_FILE, "%s-%u -> %s-%u CID %u %u\n", sipstr, (unsigned)p->src_port, dipstr, (unsigned)p->dst_port, (unsigned)cid,
-                (unsigned)protocol);
-#endif /* No Carrierid support*/
-#else
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-        uint16_t sAsId = p->pkt_header->address_space_id_src;
-        uint16_t dAsId = p->pkt_header->address_space_id_dst;
-        fprintf(SF_DEBUG_FILE, "%s-%u -> %s-%u  AS %u-%u %u\n", sipstr,
-                (unsigned)p->src_port, dipstr, (unsigned)p->dst_port,
-                sAsId, dAsId, (unsigned)protocol);
-#else
         fprintf(SF_DEBUG_FILE, "%s-%u -> %s-%u %u\n", sipstr, (unsigned)p->src_port, dipstr, (unsigned)p->dst_port, (unsigned)protocol);
-#endif
-#endif
-
         /*DumpHex(SF_DEBUG_FILE, p->payload, p->payload_size); */
     }
 #endif
@@ -3500,7 +2522,7 @@ void fwAppIdSearch(SFSnortPacket *p)
         }
         else    // not HTTP/2
         {
-            if (p->flags & FLAG_REBUILT_STREAM && !_dpd.streamAPI->is_session_decrypted(p->stream_session))
+            if (p->flags & FLAG_REBUILT_STREAM && _dpd.streamAPI->is_session_decrypted(p->stream_session) == false)
             {
                 if (direction == APP_ID_FROM_INITIATOR && session && session->hsession && session->hsession->get_offsets_from_rebuilt)
                 {
@@ -3537,9 +2559,8 @@ void fwAppIdSearch(SFSnortPacket *p)
                 {
                     tmp_session = tmp_app_id_free_list;
                     tmp_app_id_free_list = tmp_session->next;
-                    app_id_tmp_free_list_count--;
                 }
-                else if (!(tmp_session = _dpd.snortAlloc(1, sizeof(*tmp_session), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+                else if (!(tmp_session = malloc(sizeof(*tmp_session))))
                     DynamicPreprocessorFatalMessage("Could not allocate tTmpAppIdData data");
                 tmp_session->common.fsf_type.flow_type = APPID_SESSION_TYPE_TMP;
                 tmp_session->common.flags = flow_flags;
@@ -3572,13 +2593,7 @@ void fwAppIdSearch(SFSnortPacket *p)
     {
         /* This call will free the existing temporary session, if there is one */
         session = appSharedCreateData(p, protocol, direction);
-        if (_dpd.sessionAPI->get_session_flags(p->stream_session) & SSNFLAG_MIDSTREAM)
-        {
-            flow_flags |= APPID_SESSION_MID; // set once per flow
-            if (app_id_debug_session_flag)
-                _dpd.logMsg("AppIdDbg %s new mid-stream session\n", app_id_debug_session);
-        }
-        else if (app_id_debug_session_flag)
+        if (app_id_debug_session_flag)
             _dpd.logMsg("AppIdDbg %s new session\n", app_id_debug_session);
     }
 
@@ -3586,23 +2601,10 @@ void fwAppIdSearch(SFSnortPacket *p)
     session->session_packet_count++;
 
     if (direction == APP_ID_FROM_INITIATOR)
-    {
         session->stats.initiatorBytes += p->pkt_header->pktlen;
-        if ( p->payload_size)
-        {
-            session->initiatorPcketCountWithoutReply ++;
-            session->initiatorBytesWithoutServerReply += p->payload_size;
-        }
-    }
     else
-    {
         session->stats.responderBytes += p->pkt_header->pktlen;
-        if(p->payload_size)
-        {
-            session->initiatorPcketCountWithoutReply = 0;
-            session->initiatorBytesWithoutServerReply = 0;
-        }
-    }
+
     session->common.flags = flow_flags;
     session->common.policyId = appIdPolicyId;
 
@@ -3631,138 +2633,97 @@ void fwAppIdSearch(SFSnortPacket *p)
         if (app_id_debug_session_flag && !getAppIdFlag(session, APPID_SESSION_IGNORE_FLOW_LOGGED))
         {
             setAppIdFlag(session, APPID_SESSION_IGNORE_FLOW_LOGGED);
-            _dpd.logMsg("AppIdDbg %s Ignoring flow with service %d\n", app_id_debug_session, session->serviceAppId);
+            _dpd.logMsg("AppIdDbg %s Ignoring connection with service %d\n",
+                        app_id_debug_session, session->serviceAppId);
         }
         return;
     }
 
-    if (p->tcp_header && !getAppIdFlag(session, APPID_SESSION_OOO))
+    if (p->flags & FLAG_STREAM_ORDER_BAD)
+        setAppIdFlag(session, APPID_SESSION_OOO);
+    else if (p->tcp_header)
     {
-        if ((p->flags & FLAG_STREAM_ORDER_BAD) ||
-            (p->payload_size && !(p->flags & (FLAG_STREAM_ORDER_OK | FLAG_RETRANSMIT | FLAG_REBUILT_STREAM))))
+        if ((p->tcp_header->flags & TCPHEADER_RST) && session->previous_tcp_flags == TCPHEADER_SYN)
         {
-            setAppIdFlag(session, APPID_SESSION_OOO | APPID_SESSION_OOO_CHECK_TP);
-            if (app_id_debug_session_flag)
-                _dpd.logMsg("AppIdDbg %s Packet out-of-order, %s%sflow\n", app_id_debug_session,
-                    (p->flags & FLAG_STREAM_ORDER_BAD)? "bad ":"not-ok ",
-                    getAppIdFlag(session, APPID_SESSION_MID)? "mid-stream ":"");
+            AppIdServiceIDState *id_state;
 
-            /* Shut off service/client discoveries, since they skip not-ok data packets and
-               may keep failing on subsequent data packets causing performance degradation. */
-            if (!getAppIdFlag(session, APPID_SESSION_MID) || (p->src_port != 21 && p->dst_port != 21)) // exception for ftp-control
+            setAppIdFlag(session, APPID_SESSION_SYN_RST);
+            if (sfaddr_is_set(&session->service_ip))
             {
-                session->rnaServiceState = RNA_STATE_FINISHED;
-                session->rnaClientState = RNA_STATE_FINISHED;
-                if ((TPIsAppIdAvailable(session->tpsession) || getAppIdFlag(session, APPID_SESSION_NO_TPI)) &&
-                    session->payloadAppId == APP_ID_NONE)
-                    session->payloadAppId = APP_ID_UNKNOWN;
-                setAppIdFlag(session, APPID_SESSION_SERVICE_DETECTED | APPID_SESSION_CLIENT_DETECTED);
-                if (app_id_debug_session_flag)
-                    _dpd.logMsg("AppIdDbg %s stopped service/client discovery\n", app_id_debug_session);
+                ip = &session->service_ip;
+                port = session->service_port;
             }
+            else
+            {
+                ip = GET_SRC_IP(p);
+                port = p->src_port;
+            }
+            id_state = AppIdGetServiceIDState(ip, IPPROTO_TCP, port, AppIdServiceDetectionLevel(session));
+            if (id_state)
+            {
+                if (!id_state->reset_time)
+                    id_state->reset_time = GetPacketRealTime;
+                else if ((GetPacketRealTime - id_state->reset_time) >= 60)
+                {
+                    AppIdRemoveServiceIDState(ip, IPPROTO_TCP, port, AppIdServiceDetectionLevel(session));
+                    setAppIdFlag(session, APPID_SESSION_SERVICE_DELETED);
+                }
+            }
+        }
+        session->previous_tcp_flags = p->tcp_header->flags;
+    }
+
+
+    /*HostPort based AppId.  */
+    if (!(session->scan_flags & SCAN_HOST_PORT_FLAG))
+    {
+        tHostPortVal *hv;
+
+        session->scan_flags |= SCAN_HOST_PORT_FLAG;
+        if (direction == APP_ID_FROM_INITIATOR)
+        {
+            ip = GET_DST_IP(p);
+            port = p->dst_port;
         }
         else
         {
-            if ((p->tcp_header->flags & TCPHEADER_RST) && session->previous_tcp_flags == TCPHEADER_SYN)
+            ip = GET_SRC_IP(p);
+            port = p->src_port;
+        }
+        if ((hv = hostPortAppCacheFind(ip, port, protocol, pConfig)) > APP_ID_NONE)
+        {
+            switch (hv->type)
             {
-                AppIdServiceIDState *id_state;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                uint16_t asId;
-#endif
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID)
-                uint32_t cid = 0;
-#endif
-                setAppIdFlag(session, APPID_SESSION_SYN_RST);
-                if (sfaddr_is_set(&session->service_ip))
-                {
-                    ip = &session->service_ip;
-                    port = session->service_port;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                    asId = session->serviceAsId; 
-#endif
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID)
-                    cid = session->carrierId;
-#endif
-                }
-                else
-                {
-                    ip = GET_SRC_IP(p);
-                    port = p->src_port;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                    asId = p->pkt_header->address_space_id_src;
-#endif
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID)
-                    cid = GET_SFOUTER_IPH_PROTOID(p, pkt_header);
-#endif
-                }
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID) 
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                id_state = AppIdGetServiceIDState(ip, IPPROTO_TCP, port, 
-                                                  AppIdServiceDetectionLevel(session), asId, cid);
-#else
-                id_state = AppIdGetServiceIDState(ip, IPPROTO_TCP, port, AppIdServiceDetectionLevel(session), cid);
-#endif  
-#else /* No Carrierid support */
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                id_state = AppIdGetServiceIDState(ip, IPPROTO_TCP, port,
-                                                  AppIdServiceDetectionLevel(session), asId);
-#else
-                id_state = AppIdGetServiceIDState(ip, IPPROTO_TCP, port, AppIdServiceDetectionLevel(session));
-#endif
-#endif
-                if (id_state)
-                {
-                    if (!id_state->reset_time)
-                        id_state->reset_time = GetPacketRealTime;
-                    else if ((GetPacketRealTime - id_state->reset_time) >= 60)
-                    {
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID)
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                        AppIdRemoveServiceIDState(ip, IPPROTO_TCP, port, 
-                                                  AppIdServiceDetectionLevel(session),
-                                                  asId, cid);
-#else
-                        AppIdRemoveServiceIDState(ip, IPPROTO_TCP, port, AppIdServiceDetectionLevel(session), cid);
-#endif
-#else /* No carrier id support */
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-                        AppIdRemoveServiceIDState(ip, IPPROTO_TCP, port,
-                                                  AppIdServiceDetectionLevel(session),
-                                                  asId);
-#else
-
-                        AppIdRemoveServiceIDState(ip, IPPROTO_TCP, port, AppIdServiceDetectionLevel(session));
-#endif
-#endif
-                        setAppIdFlag(session, APPID_SESSION_SERVICE_DELETED);
-                    }
-                }
+            case 1:
+                session->clientAppId = hv->appId;
+                session->rnaClientState = RNA_STATE_FINISHED;
+                break;
+            case 2:
+                session->payloadAppId = hv->appId;
+                break;
+            default:
+                session->serviceAppId = hv->appId;
+                synchAppIdWithSnortId(hv->appId, p, session, pConfig);
+                session->rnaServiceState = RNA_STATE_FINISHED;
+                session->rnaClientState = RNA_STATE_FINISHED;
+                setAppIdFlag(session, APPID_SESSION_SERVICE_DETECTED);
+                if (thirdparty_appid_module)
+                    thirdparty_appid_module->session_delete(session->tpsession, 1);
+                session->tpsession = NULL;
             }
-            session->previous_tcp_flags = p->tcp_header->flags;
         }
     }
 
     checkRestartAppDetection(session);
 
-    if (outer_protocol)
+    //restart inspection by 3rd party
+    if (!session->tpReinspectByInitiator && (direction == APP_ID_FROM_INITIATOR) && checkThirdPartyReinspect(p, session))
     {
-        session->miscAppId = pConfig->ip_protocol[outer_protocol];
+        session->tpReinspectByInitiator = 1;     //once per request
+        setAppIdFlag(session, APPID_SESSION_APP_REINSPECT);
         if (app_id_debug_session_flag)
-            _dpd.logMsg("AppIdDbg %s outer protocol service %d\n", app_id_debug_session, session->miscAppId);
-    }
-
-    if (protocol != IPPROTO_TCP && protocol != IPPROTO_UDP)
-    {
-        if (!getAppIdFlag(session, APPID_SESSION_PORT_SERVICE_DONE))
-        {
-            session->serviceAppId = session->portServiceAppId = getProtocolServiceId(protocol, pConfig);
-            if (app_id_debug_session_flag)
-                _dpd.logMsg("AppIdDbg %s protocol service %d\n", app_id_debug_session, session->portServiceAppId);
-            setAppIdFlag(session, APPID_SESSION_PORT_SERVICE_DONE);
-            session->rnaServiceState = RNA_STATE_FINISHED;
-            _dpd.streamAPI->set_application_id(p->stream_session, session->serviceAppId, clientAppId, payloadAppId, session->miscAppId);
-        }
-        return;
+            _dpd.logMsg("AppIdDbg %s 3rd party allow reinspect http\n", app_id_debug_session);
+        appHttpFieldClear(session->hsession);
     }
 
     if (session->tpAppId == APP_ID_SSH && session->payloadAppId != APP_ID_SFTP && session->session_packet_count >= MIN_SFTP_PACKET_COUNT && session->session_packet_count < MAX_SFTP_PACKET_COUNT)
@@ -3775,27 +2736,265 @@ void fwAppIdSearch(SFSnortPacket *p)
         }
     }
 
-    tpAppId = processThirdParty(p, session, direction, protocol, &isTpAppidDiscoveryDone, pConfig);
+    /*** Start of third-party processing. ***/
+    PROFILE_VARS;
+    PREPROC_PROFILE_START(tpPerfStats);
+    if (thirdparty_appid_module &&
+        !getAppIdFlag(session, APPID_SESSION_NO_TPI) &&
+        (!TPIsAppIdDone(session->tpsession) ||
+         getAppIdFlag(session, APPID_SESSION_APP_REINSPECT | APPID_SESSION_APP_REINSPECT_SSL)))
+    {
+        // First SSL decrypted packet is now being inspected. Reset the flag so that SSL decrypted traffic
+        // gets processed like regular traffic from next packet onwards
+        if (getAppIdFlag(session, APPID_SESSION_APP_REINSPECT_SSL))
+        {
+            clearAppIdFlag(session, APPID_SESSION_APP_REINSPECT_SSL);
+        }
+        if (p->payload_size || appidStaticConfig.tp_allow_probes)
+        {
+            if (protocol != IPPROTO_TCP || (p->flags & FLAG_STREAM_ORDER_OK) || appidStaticConfig.tp_allow_probes)
+            {
+                PREPROC_PROFILE_START(tpLibPerfStats);
+                if (!session->tpsession)
+                {
+                    if (!(session->tpsession = thirdparty_appid_module->session_create()))
+                        DynamicPreprocessorFatalMessage("Could not allocate tAppIdData->tpsession data");
+                }
+                printSnortPacket(p); // debug output of packet content
+                thirdparty_appid_module->session_process(session->tpsession, p, direction,
+                                                         &tpAppId, &tp_confidence, &tp_proto_list, &tp_attribute_data);
+                PREPROC_PROFILE_END(tpLibPerfStats);
+                isTpAppidDiscoveryDone = true;
+                if (thirdparty_appid_module->session_state_get(session->tpsession) == TP_STATE_CLASSIFIED)
+                    clearAppIdFlag(session, APPID_SESSION_APP_REINSPECT);
+
+                if (app_id_debug_session_flag)
+                    _dpd.logMsg("AppIdDbg %s 3rd party returned %d\n", app_id_debug_session, tpAppId);
+#ifdef DEBUG_FW_APPID
+#if defined(DEBUG_FW_APPID_PORT) && DEBUG_FW_APPID_PORT
+                if (p->dst_port == DEBUG_FW_APPID_PORT || p->src_port == DEBUG_FW_APPID_PORT)
+#endif
+                    fprintf(SF_DEBUG_FILE, "%u -> %u %u 3rd party returned %d\n",
+                            (unsigned)p->src_port, (unsigned)p->dst_port, (unsigned)protocol, tpAppId);
+#endif
+
+                // For now, third party can detect HTTP/2 (w/o metadata) for
+                // some cases.  Treat it like HTTP w/ is_http2 flag set.
+                if ((tpAppId == APP_ID_HTTP2) && (tp_confidence == 100))
+                {
+                    if (app_id_debug_session_flag)
+                        _dpd.logMsg("AppIdDbg %s 3rd party saw HTTP/2\n", app_id_debug_session);
+                    tpAppId = APP_ID_HTTP;
+                    session->is_http2 = true;
+                }
+
+                // if the third-party appId must be treated as a client, do it now
+                if (appInfoEntryFlagGet(tpAppId, APPINFO_FLAG_TP_CLIENT, appIdActiveConfigGet()))
+                    session->clientAppId = tpAppId;
+
+                ProcessThirdPartyResults(p, session, tp_confidence, tp_proto_list, tp_attribute_data);
+
+                if (getAppIdFlag(session, APPID_SESSION_SSL_SESSION) &&
+                    !(session->scan_flags & SCAN_SSL_HOST_FLAG))
+                {
+                    setSSLSquelch(p, 1, tpAppId);
+                }
+
+                if (appInfoEntryFlagGet(tpAppId, APPINFO_FLAG_IGNORE, pConfig))
+                {
+                    if (app_id_debug_session_flag)
+                        _dpd.logMsg("AppIdDbg %s 3rd party ignored\n", app_id_debug_session);
+                    if (getAppIdFlag(session, APPID_SESSION_HTTP_SESSION))
+                        tpAppId = APP_ID_HTTP;
+                    else
+                        tpAppId = APP_ID_NONE;
+                }
+            }
+            else
+            {
+                tpAppId = APP_ID_NONE;
+#ifdef DEBUG_FW_APPID
+#if defined(DEBUG_FW_APPID_PORT) && DEBUG_FW_APPID_PORT
+                if (p->dst_port == DEBUG_FW_APPID_PORT || p->src_port == DEBUG_FW_APPID_PORT)
+#endif
+                    fprintf(SF_DEBUG_FILE, "%u -> %u %u Skipping ooo\n",
+                            (unsigned)p->src_port, (unsigned)p->dst_port, (unsigned)protocol);
+#endif
+                if (app_id_debug_session_flag && !getAppIdFlag(session, APPID_SESSION_TPI_OOO_LOGGED))
+                {
+                    setAppIdFlag(session, APPID_SESSION_TPI_OOO_LOGGED);
+                    _dpd.logMsg("AppIdDbg %s 3rd party packet out-of-order\n", app_id_debug_session);
+                }
+            }
+
+            if (thirdparty_appid_module->session_state_get(session->tpsession) == TP_STATE_MONITORING)
+            {
+                thirdparty_appid_module->disable_flags(session->tpsession, TP_SESSION_FLAG_ATTRIBUTE | TP_SESSION_FLAG_TUNNELING | TP_SESSION_FLAG_FUTUREFLOW);
+            }
+
+            if(tpAppId == APP_ID_SSL && (_dpd.sessionAPI->get_application_protocol_id(p->stream_session) == snortId_for_ftp_data))
+            {
+                //  If we see SSL on an FTP data channel set tpAppId back
+                //  to APP_ID_NONE so the FTP preprocessor picks up the flow.
+                tpAppId = APP_ID_NONE;
+            }
+
+            if (tpAppId > APP_ID_NONE && (!getAppIdFlag(session, APPID_SESSION_APP_REINSPECT) || session->payloadAppId > APP_ID_NONE))
+            {
+#ifdef TARGET_BASED
+                tAppId snortAppId;
+#endif
+
+                // if the packet is HTTP, then search for via pattern
+                if (getAppIdFlag(session, APPID_SESSION_HTTP_SESSION) && session->hsession)
+                {
+#ifdef TARGET_BASED
+                    snortAppId = APP_ID_HTTP;
+#endif
+                    //payload should never be APP_ID_HTTP
+                    if (tpAppId != APP_ID_HTTP)
+                        session->tpPayloadAppId = tpAppId;
+
+#ifdef DEBUG_FW_APPID
+#if defined(DEBUG_FW_APPID_PORT) && DEBUG_FW_APPID_PORT
+                    if (p->dst_port == DEBUG_FW_APPID_PORT || p->src_port == DEBUG_FW_APPID_PORT)
+#endif
+                        fprintf(SF_DEBUG_FILE, "%u -> %u %u tp identified http payload %d\n",
+                                (unsigned)p->src_port, (unsigned)p->dst_port, (unsigned)protocol, tpAppId);
+#endif
+
+                    session->tpAppId = APP_ID_HTTP;
+
+                    processHTTPPacket(p, session, direction, NULL, appIdActiveConfigGet());
+
+                    if (TPIsAppIdAvailable(session->tpsession) && session->tpAppId == APP_ID_HTTP
+                                                        && !getAppIdFlag(session, APPID_SESSION_APP_REINSPECT))
+                    {
+                        session->rnaClientState = RNA_STATE_FINISHED;
+                        setAppIdFlag(session, APPID_SESSION_CLIENT_DETECTED | APPID_SESSION_SERVICE_DETECTED);
+                        session->rnaServiceState = RNA_STATE_FINISHED;
+                        clearAppIdFlag(session, APPID_SESSION_CONTINUE);
+                        if (direction == APP_ID_FROM_INITIATOR)
+                        {
+                            ip = GET_DST_IP(p);
+                            session->service_ip = *ip;
+                            session->service_port = p->dst_port;
+                        }
+                        else
+                        {
+                            ip = GET_SRC_IP(p);
+                            session->service_ip = *ip;
+                            session->service_port = p->src_port;
+                        }
+                    }
+                }
+                else if (getAppIdFlag(session, APPID_SESSION_SSL_SESSION) && session->tsession)
+                {
+                    ExamineSslMetadata(p, session, pConfig);
+
+                    uint16_t serverPort;
+                    tAppId portAppId;
+
+                    serverPort = (direction == APP_ID_FROM_INITIATOR)? p->dst_port:p->src_port;
+
+                    portAppId = getSslServiceAppId(serverPort);
+                    if (tpAppId == APP_ID_SSL )
+                    {
+                        tpAppId = portAppId;
+
+                        //SSL policy needs to determine IMAPS/POP3S etc before appId sees first server packet
+                        session->portServiceAppId = portAppId;
+
+                        if (app_id_debug_session_flag)
+                            _dpd.logMsg("AppIdDbg %s SSL is service %d, portServiceAppId %d\n",
+                                    app_id_debug_session, tpAppId, session->portServiceAppId);
+                    }
+                    else
+                    {
+                        session->tpPayloadAppId = tpAppId;
+                        tpAppId = portAppId;
+                        if (app_id_debug_session_flag)
+                            _dpd.logMsg("AppIdDbg %s SSL is %d\n", app_id_debug_session, tpAppId);
+                    }
+                    session->tpAppId = tpAppId;
+#ifdef TARGET_BASED
+                    snortAppId = APP_ID_SSL;
+#endif
+
+#ifdef DEBUG_FW_APPID
+#if defined(DEBUG_FW_APPID_PORT) && DEBUG_FW_APPID_PORT
+                    if (p->dst_port == DEBUG_FW_APPID_PORT || p->src_port == DEBUG_FW_APPID_PORT)
+#endif
+                        fprintf(SF_DEBUG_FILE, "%u -> %u %u tp identified ssl service %d\n",
+                                (unsigned)p->src_port, (unsigned)p->dst_port, (unsigned)protocol, tpAppId);
+#endif
+                }
+                else
+                {
+                    //for non-http protocols, tp id is treated like serviceId
+
+#ifdef TARGET_BASED
+                    snortAppId = tpAppId;
+#endif
+
+#ifdef DEBUG_FW_APPID
+#if defined(DEBUG_FW_APPID_PORT) && DEBUG_FW_APPID_PORT
+                    if (p->dst_port == DEBUG_FW_APPID_PORT || p->src_port == DEBUG_FW_APPID_PORT)
+#endif
+                        fprintf(SF_DEBUG_FILE, "%u -> %u %u tp identified non-http service %d\n",
+                                (unsigned)p->src_port, (unsigned)p->dst_port, (unsigned)protocol, tpAppId);
+#endif
+                    session->tpAppId = tpAppId;
+                }
+
+#ifdef TARGET_BASED
+                synchAppIdWithSnortId(snortAppId, p, session, pConfig);
+#endif
+            }
+            else
+            {
+                if (protocol != IPPROTO_TCP || (p->flags & (FLAG_STREAM_ORDER_OK | FLAG_STREAM_ORDER_BAD)))
+                {
+                    if (direction == APP_ID_FROM_INITIATOR)
+                    {
+                        session->init_tpPackets++;
+                        checkTerminateTpModule(session->init_tpPackets, session);
+                    }
+                    else
+                    {
+                        session->resp_tpPackets++;
+                        checkTerminateTpModule(session->resp_tpPackets, session);
+                    }
+                }
+            }
+        }
+    }
+    PREPROC_PROFILE_END(tpPerfStats);
+    /*** End of third-party processing. ***/
+
+    if (session->tpReinspectByInitiator && checkThirdPartyReinspect(p, session))
+    {
+        clearAppIdFlag(session, APPID_SESSION_APP_REINSPECT);
+        if (direction == APP_ID_FROM_RESPONDER)
+            session->tpReinspectByInitiator = 0; //toggle at OK response
+    }
 
     if (!getAppIdFlag(session, APPID_SESSION_PORT_SERVICE_DONE))
     {
         switch (protocol)
         {
         case IPPROTO_TCP:
-            // TCP-specific checks. No SYN/RST, and no SYN/ACK
-            // we have to check for SYN/ACK here explicitly in case of TCP Fast Open
-            if (getAppIdFlag(session, APPID_SESSION_SYN_RST) ||
-                (p->tcp_header && (p->tcp_header->flags & TCPHEADER_SYN) &&
-                (p->tcp_header->flags & TCPHEADER_ACK)))
+            if (getAppIdFlag(session, APPID_SESSION_SYN_RST)) // TCP-specific exception
                 break;
             // fall through to next test
         case IPPROTO_UDP:
-            // Both TCP and UDP need these tests to be made
-            // packet must be from responder, and with a non-zero payload size
+            // Both TCP and UDP need this test to be made
+            //  against only the p->src_port of the response.
             // For all other cases the port parameter is never checked.
-            if (p->payload_size < 1 || direction != APP_ID_FROM_RESPONDER)
+            if (direction != APP_ID_FROM_RESPONDER)
                 break;
             // fall through to all other cases
+        // All protocols other than TCP and UDP come straight here.
         default:
             {
                 session->portServiceAppId = getPortServiceId(protocol, p->src_port, pConfig);
@@ -3811,11 +3010,10 @@ void fwAppIdSearch(SFSnortPacket *p)
     /* Only check if:
      *  - Port service didn't find anything (and we haven't yet either).
      *  - We haven't hit the max packets allowed for detector sequence matches.
-     *  - Packet has in-order data (we'll ignore 0-sized packets in sequencing). */
-    if (   (p->payload_size > 0)
-        && (session->portServiceAppId <= APP_ID_NONE)
+     *  - Packet has data (we'll ignore 0-sized packets in sequencing). */
+    if (   (session->portServiceAppId <= APP_ID_NONE)
         && (session->length_sequence.sequence_cnt < LENGTH_SEQUENCE_CNT_MAX)
-        && !getAppIdFlag(session, APPID_SESSION_OOO))
+        && (p->payload_size > 0))
     {
         uint8_t index = session->length_sequence.sequence_cnt;
         session->length_sequence.proto = protocol;
@@ -3833,33 +3031,34 @@ void fwAppIdSearch(SFSnortPacket *p)
     if (getAppIdFlag(session, APPID_SESSION_REXEC_STDERR))
     {
         AppIdDiscoverService(p, direction, session, pConfig);
-
-        if (getAppIdFlag(session, APPID_SESSION_SERVICE_DETECTED | APPID_SESSION_CONTINUE) ==
-            APPID_SESSION_SERVICE_DETECTED)
+        if(session->serviceAppId == APP_ID_DNS && appidStaticConfig.dns_host_reporting && session->dsession && session->dsession->host )
         {
-            session->rnaServiceState = RNA_STATE_FINISHED;
-            if (session->payloadAppId == APP_ID_NONE)
-                session->payloadAppId = APP_ID_UNKNOWN;
+            size = session->dsession->host_len;
+            dns_host_scan_hostname((const u_int8_t *)session->dsession->host, size, &clientAppId, &payloadAppId, &pConfig->serviceDnsConfig);
+            setClientAppIdData(session, clientAppId, NULL);
         }
+        else if (session->serviceAppId == APP_ID_RTMP)
+            ExamineRtmpMetadata(session);
+        else if (getAppIdFlag(session, APPID_SESSION_SSL_SESSION) && session->tsession)
+            ExamineSslMetadata(p, session, pConfig);
     }
 
-    else if (protocol != IPPROTO_TCP || (p->flags & FLAG_STREAM_ORDER_OK) || getAppIdFlag(session, APPID_SESSION_MID))
+    else if (protocol != IPPROTO_TCP || (p->flags & FLAG_STREAM_ORDER_OK)||( _dpd.sessionAPI->get_session_flags(p->stream_session) & SSNFLAG_MIDSTREAM))
     {
         /*** Start of service discovery. ***/
         if (session->rnaServiceState != RNA_STATE_FINISHED)
         {
-            PROFILE_VARS;
-            RNA_INSPECTION_STATE prevRnaServiceState;
+            uint32_t prevRnaServiceState;
             PREPROC_PROFILE_START(serviceMatchPerfStats);
 
             tpAppId = session->tpAppId;
             prevRnaServiceState = session->rnaServiceState;
 
             //decision to directly call validator or go through elaborate service_state tracking
-            //is made once at the beginning of session.
+            //is made once at the beginning of sesssion.
             if (session->rnaServiceState == RNA_STATE_NONE && p->payload_size)
             {
-                if (getAppIdFlag(session, APPID_SESSION_MID))
+                if (_dpd.sessionAPI->get_session_flags(p->stream_session) & SSNFLAG_MIDSTREAM)
                 {
                     // Unless it could be ftp control
                     if (protocol == IPPROTO_TCP && (p->src_port == 21 || p->dst_port == 21) &&
@@ -3876,11 +3075,8 @@ void fwAppIdSearch(SFSnortPacket *p)
                     }
                     else
                     {
-                        setAppIdFlag(session, APPID_SESSION_SERVICE_DETECTED);
+                        setAppIdFlag(session, APPID_SESSION_MID | APPID_SESSION_SERVICE_DETECTED);
                         session->rnaServiceState = RNA_STATE_FINISHED;
-                        if ((TPIsAppIdAvailable(session->tpsession) || getAppIdFlag(session, APPID_SESSION_NO_TPI)) &&
-                            session->payloadAppId == APP_ID_NONE)
-                            session->payloadAppId = APP_ID_UNKNOWN;
                     }
                 }
                 else if (TPIsAppIdAvailable(session->tpsession))
@@ -3889,7 +3085,6 @@ void fwAppIdSearch(SFSnortPacket *p)
                     {
                         //tp has positively identified appId, Dig deeper only if sourcefire detector
                         //identifies additional information or flow is UDP reveresed.
-#ifdef TARGET_BASED
                         if ((entry = appInfoEntryGet(tpAppId, pConfig))
                                 && entry->svrValidator &&
                                 ((entry->flags & APPINFO_FLAG_SERVICE_ADDITIONAL) ||
@@ -3919,7 +3114,6 @@ void fwAppIdSearch(SFSnortPacket *p)
                         {
                             stopRnaServiceInspection(p, session, direction);
                         }
-#endif
                     }
                     else
                         session->rnaServiceState = RNA_STATE_STATEFUL;
@@ -3935,7 +3129,6 @@ void fwAppIdSearch(SFSnortPacket *p)
                 TPIsAppIdAvailable(session->tpsession) &&
                 tpAppId > APP_ID_NONE  && tpAppId < SF_APPID_MAX)
             {
-#ifdef TARGET_BASED
                 entry = appInfoEntryGet(tpAppId, pConfig);
 
                 if (entry && entry->svrValidator && !(entry->flags & APPINFO_FLAG_SERVICE_ADDITIONAL))
@@ -3943,36 +3136,6 @@ void fwAppIdSearch(SFSnortPacket *p)
                     if (app_id_debug_session_flag)
                         _dpd.logMsg("AppIdDbg %s Stopping service detection\n", app_id_debug_session);
                     stopRnaServiceInspection(p, session, direction);
-                }
-#endif
-            }
-
-            // Check to see if we want to stop any detectors for SIP/RTP.
-            if (session->rnaServiceState != RNA_STATE_FINISHED)
-            {
-                if (tpAppId == APP_ID_SIP)
-                {
-                    // TP needs to see its own future flows and does a better
-                    // job of it than we do, so stay out of its way, and don't
-                    // waste time (but we will still get the Snort callbacks
-                    // for any of our own future flows).
-                    //  - Shut down our detectors.
-                    session->serviceAppId = APP_ID_SIP;
-                    stopRnaServiceInspection(p, session, direction);
-                    session->rnaClientState = RNA_STATE_FINISHED;
-                }
-                else if ((tpAppId == APP_ID_RTP) || (tpAppId == APP_ID_RTP_AUDIO) || (tpAppId == APP_ID_RTP_VIDEO))
-                {
-                    // No need for anybody to keep wasting time once we've
-                    // found RTP.
-                    //  - Shut down our detectors.
-                    session->serviceAppId = tpAppId;
-                    stopRnaServiceInspection(p, session, direction);
-                    session->rnaClientState = RNA_STATE_FINISHED;
-                    //  - Shut down TP.
-                    thirdparty_appid_module->session_state_set(session->tpsession, TP_STATE_TERMINATED);
-                    //  - Just ignore everything from now on.
-                    setAppIdFlag(session, APPID_SESSION_IGNORE_FLOW);
                 }
             }
 
@@ -3989,27 +3152,18 @@ void fwAppIdSearch(SFSnortPacket *p)
                 isTpAppidDiscoveryDone = true;
                 //to stop executing validator after service has been detected by RNA.
                 if (getAppIdFlag(session, APPID_SESSION_SERVICE_DETECTED | APPID_SESSION_CONTINUE) == APPID_SESSION_SERVICE_DETECTED)
-		{
                     session->rnaServiceState = RNA_STATE_FINISHED;
-                    if ((TPIsAppIdAvailable(session->tpsession) || getAppIdFlag(session, APPID_SESSION_NO_TPI)) &&
-                        session->payloadAppId == APP_ID_NONE)
-                        session->payloadAppId = APP_ID_UNKNOWN;
-		}
-                if (session->rnaServiceState == RNA_STATE_STATEFUL && session->serviceAppId == APP_ID_NONE && svcTakingTooMuchTime(session))
-                {
-                    stopRnaServiceInspection(p, session, direction);
-                    session->serviceAppId = APP_ID_UNKNOWN;
-                }
-                else if(session->serviceAppId == APP_ID_DNS && appidStaticConfig->dns_host_reporting && session->dsession && session->dsession->host  )
+
+                if(session->serviceAppId == APP_ID_DNS && appidStaticConfig.dns_host_reporting && session->dsession && session->dsession->host  )
                 {
                     size = session->dsession->host_len;
                     dns_host_scan_hostname((const u_int8_t *)session->dsession->host , size, &clientAppId, &payloadAppId, &pConfig->serviceDnsConfig);
-                    setClientAppIdData(p, direction, session, clientAppId, NULL);
+                    setClientAppIdData(session, clientAppId, NULL);
                 }
                 else if (session->serviceAppId == APP_ID_RTMP)
-                    ExamineRtmpMetadata(p, direction, session);
+                    ExamineRtmpMetadata(session);
                 else if (getAppIdFlag(session, APPID_SESSION_SSL_SESSION) && session->tsession)
-                    ExamineSslMetadata(p, direction, session, pConfig);
+                    ExamineSslMetadata(p, session, pConfig);
 
 #ifdef TARGET_BASED
                 if (tpAppId <= APP_ID_NONE &&
@@ -4026,23 +3180,21 @@ void fwAppIdSearch(SFSnortPacket *p)
         /*** Start of client discovery. ***/
         if (session->rnaClientState != RNA_STATE_FINISHED)
         {
-            PROFILE_VARS;
             PREPROC_PROFILE_START(clientMatchPerfStats);
-            RNA_INSPECTION_STATE prevRnaClientState = session->rnaClientState;
+            uint32_t prevRnaClientState = session->rnaClientState;
             bool was_http2 = session->is_http2;
 #ifdef TARGET_BASED
             bool was_service = getAppIdFlag(session, APPID_SESSION_SERVICE_DETECTED) ? true : false;
 #endif
 
             //decision to directly call validator or go through elaborate service_state tracking
-            //is made once at the beginning of session.
+            //is made once at the beginning of sesssion.
             if (session->rnaClientState == RNA_STATE_NONE && p->payload_size && direction == APP_ID_FROM_INITIATOR)
             {
-                if (getAppIdFlag(session, APPID_SESSION_MID))
+                if (_dpd.sessionAPI->get_session_flags(p->stream_session) & SSNFLAG_MIDSTREAM)
                     session->rnaClientState = RNA_STATE_FINISHED;
                 else if (TPIsAppIdAvailable(session->tpsession) && (tpAppId = session->tpAppId) > APP_ID_NONE && tpAppId < SF_APPID_MAX)
                 {
-#ifdef TARGET_BASED
                     if ((entry = appInfoEntryGet(tpAppId, pConfig)) && entry->clntValidator &&
                             ((entry->flags & APPINFO_FLAG_CLIENT_ADDITIONAL) ||
                              ((entry->flags & APPINFO_FLAG_CLIENT_USER) &&
@@ -4058,7 +3210,6 @@ void fwAppIdSearch(SFSnortPacket *p)
                         setAppIdFlag(session, APPID_SESSION_CLIENT_DETECTED);
                         session->rnaClientState = RNA_STATE_FINISHED;
                     }
-#endif
                 }
                 else if (getAppIdFlag(session, APPID_SESSION_HTTP_SESSION))
                     session->rnaClientState = RNA_STATE_FINISHED;
@@ -4074,7 +3225,6 @@ void fwAppIdSearch(SFSnortPacket *p)
                 TPIsAppIdAvailable(session->tpsession) &&
                 tpAppId > APP_ID_NONE  && tpAppId < SF_APPID_MAX)
             {
-#ifdef TARGET_BASED
                 entry = appInfoEntryGet(tpAppId, pConfig);
 
                 if (!(entry && entry->clntValidator && entry->clntValidator == session->clientData && (entry->flags & (APPINFO_FLAG_CLIENT_ADDITIONAL|APPINFO_FLAG_CLIENT_USER))))
@@ -4082,7 +3232,6 @@ void fwAppIdSearch(SFSnortPacket *p)
                     session->rnaClientState = RNA_STATE_FINISHED;
                     setAppIdFlag(session, APPID_SESSION_CLIENT_DETECTED);
                 }
-#endif
             }
 
             if (session->rnaClientState == RNA_STATE_DIRECT)
@@ -4156,15 +3305,11 @@ void fwAppIdSearch(SFSnortPacket *p)
                             ret = RunClientDetectors(session, p, direction, pConfig);
                         }
                         if (ret < 0)
-                        {
                             setAppIdFlag(session, APPID_SESSION_CLIENT_DETECTED);
-                            session->rnaClientState = RNA_STATE_FINISHED;
-                        }
                     }
                     else
                     {
                         setAppIdFlag(session, APPID_SESSION_CLIENT_DETECTED);
-                        session->rnaClientState = RNA_STATE_FINISHED;
                     }
                 }
             }
@@ -4189,10 +3334,16 @@ void fwAppIdSearch(SFSnortPacket *p)
 #endif
         fprintf(SF_DEBUG_FILE, "Packet not okay\n");
 #endif
+        if (app_id_debug_session_flag && p->payload_size &&
+            !getAppIdFlag(session, APPID_SESSION_OOO_LOGGED))
+        {
+            setAppIdFlag(session, APPID_SESSION_OOO_LOGGED);
+            _dpd.logMsg("AppIdDbg %s packet out-of-order\n", app_id_debug_session);
+        }
     }
 
-    serviceAppId = fwPickServiceAppId(session);
-    payloadAppId = fwPickPayloadAppId(session);
+    serviceAppId = pickServiceAppId(session);
+    payloadAppId = pickPayloadId(session);
 
     if (serviceAppId > APP_ID_NONE)
     {
@@ -4205,88 +3356,7 @@ void fwAppIdSearch(SFSnortPacket *p)
             setAppIdFlag(session, APPID_SESSION_CONTINUE);
     }
 
-    clientAppId = fwPickClientAppId(session);
-    miscAppId = fwPickMiscAppId(session);
-
-    if (!getAppIdFlag(session, APPID_SESSION_HOST_CACHE_MATCHED))
-    {
-        bool isHttpTunnel = (payloadAppId == APP_ID_HTTP_TUNNEL || payloadAppId == APP_ID_HTTP_SSL_TUNNEL) ? true : false;
-        if(isCheckHostCacheValid(session, serviceAppId, clientAppId, payloadAppId, miscAppId) || isHttpTunnel)
-        {
-            bool isCheckHostCache =  true;
-            sfaddr_t *srv_ip;
-            uint16_t srv_port;
-
-            if (isHttpTunnel)
-            {
-                if (session->hsession)
-                {
-                    if (session->scan_flags & SCAN_HTTP_URI_FLAG)
-                    {
-                        if (session->hsession->tunDest)
-                        {
-                            _dpd.snortFree(session->hsession->tunDest, sizeof(tunnelDest), PP_APP_ID, PP_MEM_CATEGORY_SESSION);
-                            session->hsession->tunDest = NULL;
-                        }
-                        getIpPortFromHttpTunnel(session->hsession->uri, session->hsession->uri_buflen, &session->hsession->tunDest);
-                        session->scan_flags &= ~SCAN_HTTP_URI_FLAG;
-                    }
-
-                    if (session->hsession->tunDest)
-                    {
-                        srv_ip = &(session->hsession->tunDest->ip);
-                        srv_port = session->hsession->tunDest->port;
-                    }
-                    else
-                    {
-                        isCheckHostCache =  false;
-                    }
-                }
-                else
-                {
-                    isCheckHostCache =  false;
-                }
-            }
-            else
-            {
-                if (direction == APP_ID_FROM_INITIATOR)
-                {
-                    srv_ip = GET_DST_IP(p);
-                    srv_port = p->dst_port;
-                }
-                else
-                {
-                    srv_ip = GET_SRC_IP(p);
-                    srv_port = p->src_port;
-                }
-            }
-
-            if (isCheckHostCache && checkHostCache(p, session, srv_ip, srv_port, protocol, pConfig))
-            {
-                session->portServiceAppId = APP_ID_NONE; // overriding the portServiceAppId in case of a cache hit
-                serviceAppId = pickServiceAppId(session);
-                payloadAppId = pickPayloadId(session);
-                clientAppId = pickClientAppId(session);
-            }
-        }
-    }
-
-    /* For OOO flow, disable third party if checkHostCache is done and appid is found.
-       Not sure if it is safe to set APPID_SESSION_IGNORE_FLOW here. */
-    if ((getAppIdFlag(session, APPID_SESSION_OOO_CHECK_TP | APPID_SESSION_HOST_CACHE_MATCHED) ==
-            (APPID_SESSION_OOO_CHECK_TP | APPID_SESSION_HOST_CACHE_MATCHED)) &&
-        (serviceAppId || payloadAppId || clientAppId) && thirdparty_appid_module)
-    {
-        clearAppIdFlag(session, APPID_SESSION_OOO_CHECK_TP); // don't repeat this block
-        if (!TPIsAppIdDone(session->tpsession))
-        {
-            thirdparty_appid_module->session_state_set(session->tpsession, TP_STATE_TERMINATED);
-            if (app_id_debug_session_flag)
-                _dpd.logMsg("AppIdDbg %s stopped third party detection\n", app_id_debug_session);
-        }
-    }
-
-    _dpd.streamAPI->set_application_id(p->stream_session, serviceAppId, clientAppId, payloadAppId, miscAppId);
+    _dpd.streamAPI->set_application_id(p->stream_session, serviceAppId, pickClientAppId(session), payloadAppId, pickMiscAppId(session));
 
     /* Set the field that the Firewall queries to see if we have a search engine. */
     if (session->search_support_type == SEARCH_SUPPORT_TYPE_UNKNOWN && payloadAppId > APP_ID_NONE)
@@ -4312,25 +3382,16 @@ void fwAppIdSearch(SFSnortPacket *p)
 
     if (serviceAppId > APP_ID_NONE)
     {
-        if (session->pastIndicator != payloadAppId && payloadAppId > APP_ID_NONE)
+        if (payloadAppId > APP_ID_NONE && payloadAppId != session->pastIndicator)
         {
             session->pastIndicator = payloadAppId;
             checkSessionForAFIndicator(p, direction, pConfig, payloadAppId);
         }
 
-        if (session->pastForecast != serviceAppId && session->payloadAppId == APP_ID_NONE && session->pastForecast != APP_ID_UNKNOWN)
+        if (session->payloadAppId == APP_ID_NONE && session->pastForecast != serviceAppId && session->pastForecast != APP_ID_UNKNOWN)
         {
             session->pastForecast = checkSessionForAFForecast(session, p, direction, pConfig, serviceAppId);
         }
-    }
-
-    if (*_dpd.pkt_tracer_enabled)
-    {
-        const char *serviceName = appGetAppName(serviceAppId);
-        const char *appName = appGetAppName(payloadAppId);
-        _dpd.addPktTrace(VERDICT_REASON_APPID, snprintf(_dpd.trace, _dpd.traceMax, "AppID: service %s (%d), application %s (%d)%s\n",
-            serviceName? serviceName : "unknown", serviceAppId, appName? appName : "unknown", payloadAppId,
-            getAppIdFlag(session, APPID_SESSION_OOO)? ", out-of-order":""));
     }
 
 #ifdef DEBUG_FW_APPID
@@ -4350,33 +3411,19 @@ void fwAppIdSearch(SFSnortPacket *p)
 #endif
 }
 
-STATIC INLINE void pickHttpXffAddress(SFSnortPacket* p, tAppIdData* appIdSession, ThirdPartyAppIDAttributeData* attribute_data)
+STATIC inline void pickHttpXffAddress(SFSnortPacket* p, tAppIdData* appIdSession, ThirdPartyAppIDAttributeData* attribute_data)
 {
     int i;
     static char* defaultXffPrecedence[] = {HTTP_XFF_FIELD_X_FORWARDED_FOR, HTTP_XFF_FIELD_TRUE_CLIENT_IP};
 
     // XFF precedence configuration cannot change for a session. Do not get it again if we already got it.
     if (!appIdSession->hsession->xffPrecedence)
+        appIdSession->hsession->xffPrecedence = _dpd.sessionAPI->get_http_xff_precedence(p->stream_session, p->flags, &appIdSession->hsession->numXffFields);
+
+    if (!appIdSession->hsession->xffPrecedence)
     {
-        char** xffPrecedence = _dpd.sessionAPI->get_http_xff_precedence(p->stream_session, p->flags, &appIdSession->hsession->numXffFields);
-        int j;
-
-        if (!xffPrecedence)
-        {
-            xffPrecedence = defaultXffPrecedence;
-            appIdSession->hsession->numXffFields = sizeof(defaultXffPrecedence) / sizeof(defaultXffPrecedence[0]);
-        }
-
-        appIdSession->hsession->xffPrecedence = _dpd.snortAlloc(appIdSession->hsession->numXffFields,
-                sizeof(char*), PP_APP_ID, PP_MEM_CATEGORY_SESSION);
-        if(!appIdSession->hsession->xffPrecedence)
-        {
-            DynamicPreprocessorFatalMessage("pickHttpXffAddress: "
-                    "failed to allocate memory for xffPrecedence in appIdSession\n");
-        }
-
-        for (j = 0; j < appIdSession->hsession->numXffFields; j++)
-            appIdSession->hsession->xffPrecedence[j] = strndup(xffPrecedence[j], UINT8_MAX);
+        appIdSession->hsession->xffPrecedence = defaultXffPrecedence;
+        appIdSession->hsession->numXffFields = sizeof(defaultXffPrecedence) / sizeof(defaultXffPrecedence[0]);
     }
 
     if (app_id_debug_session_flag)
@@ -4421,7 +3468,7 @@ STATIC INLINE void pickHttpXffAddress(SFSnortPacket* p, tAppIdData* appIdSession
     }
 }
 
-static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRECTION direction, tAppIdData* appIdSession, int confidence, tAppId* proto_list, ThirdPartyAppIDAttributeData* attribute_data)
+static inline void ProcessThirdPartyResults(SFSnortPacket* p, tAppIdData* appIdSession, int confidence, tAppId* proto_list, ThirdPartyAppIDAttributeData* attribute_data)
 {
     int size;
     tAppId serviceAppId = 0;
@@ -4429,52 +3476,38 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
     tAppId payloadAppId = 0;
     tAppId referredPayloadAppId = 0;
     tAppIdConfig *pConfig = appIdActiveConfigGet();
-#ifdef TARGET_BASED
-    AppInfoTableEntry *entry = NULL;
-#endif
 
-    if (!appIdSession->payloadAppId && ThirdPartyAppIDFoundProto(APP_ID_EXCHANGE, proto_list))
-        appIdSession->payloadAppId = APP_ID_EXCHANGE;
+    if (ThirdPartyAppIDFoundProto(APP_ID_EXCHANGE, proto_list))
+    {
+        if (!appIdSession->payloadAppId)
+            appIdSession->payloadAppId = APP_ID_EXCHANGE;
+    }
 
     if (ThirdPartyAppIDFoundProto(APP_ID_HTTP, proto_list))
     {
+        if (app_id_debug_session_flag)
+            _dpd.logMsg("AppIdDbg %s flow is HTTP\n", app_id_debug_session);
         setAppIdFlag(appIdSession, APPID_SESSION_HTTP_SESSION);
     }
     if (ThirdPartyAppIDFoundProto(APP_ID_SPDY, proto_list))
     {
+        if (app_id_debug_session_flag)
+            _dpd.logMsg("AppIdDbg %s flow is SPDY\n", app_id_debug_session);
+
         setAppIdFlag(appIdSession, APPID_SESSION_HTTP_SESSION | APPID_SESSION_SPDY_SESSION);
-    }
-    if (ThirdPartyAppIDFoundProto(APP_ID_SSL, proto_list))
-    {
-        if (getAppIdFlag(appIdSession, APPID_SESSION_HTTP_TUNNEL))
-        {
-            if (!appIdSession->serviceData)
-            {
-#ifdef TARGET_BASED
-                entry = appInfoEntryGet(APP_ID_SSL, pConfig);
-                appIdSession->serviceData = entry->svrValidator;
-#endif
-            }
-            if (getAppIdFlag(appIdSession, APPID_SESSION_HTTP_SESSION | APPID_SESSION_SPDY_SESSION))
-                clearAppIdFlag(appIdSession, APPID_SESSION_HTTP_SESSION | APPID_SESSION_SPDY_SESSION);
-        }
-        setAppIdFlag(appIdSession, APPID_SESSION_SSL_SESSION);
     }
 
     if (getAppIdFlag(appIdSession, APPID_SESSION_HTTP_SESSION))
     {
         if (!appIdSession->hsession)
         {
-            if (!(appIdSession->hsession = _dpd.snortAlloc(1, sizeof(*appIdSession->hsession), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+            if (!(appIdSession->hsession = calloc(1, sizeof(*appIdSession->hsession))))
                 DynamicPreprocessorFatalMessage("Could not allocate httpSession data");
             memset(ptype_scan_counts, 0, 7 * sizeof(ptype_scan_counts[0]));
         }
 
         if (getAppIdFlag(appIdSession, APPID_SESSION_SPDY_SESSION))
         {
-            if (app_id_debug_session_flag)
-                _dpd.logMsg("AppIdDbg %s flow is SPDY\n", app_id_debug_session);
-
             if (attribute_data->spdyRequestScheme &&
                 attribute_data->spdyRequestHost &&
                 attribute_data->spdyRequestPath)
@@ -4549,9 +3582,6 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
         }
         else
         {
-            if (app_id_debug_session_flag)
-                _dpd.logMsg("AppIdDbg %s flow is HTTP\n", app_id_debug_session);
-
             if (attribute_data->httpRequestHost)
             {
                 if (appIdSession->hsession->host)
@@ -4585,11 +3615,6 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
                         && memcmp(attribute_data->httpRequestUrl, httpScheme, sizeof(httpScheme)-1) == 0)
                 {
                     appIdSession->hsession->url = malloc(strlen(attribute_data->httpRequestUrl) + 2);
-                    if(!appIdSession->hsession->url)
-                    {
-                         DynamicPreprocessorFatalMessage("ProcessThirdPartyResults: "
-                                 "Failed to allocate URL memory in AppID session\n");
-                    }
 
                     if (appIdSession->hsession->url)
                         sprintf(appIdSession->hsession->url, "https://%s", attribute_data->httpRequestUrl + sizeof(httpScheme)-1);
@@ -4617,7 +3642,6 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
                 appIdSession->hsession->uri_buflen = attribute_data->httpRequestUriLen;
                 appIdSession->hsession->fieldOffset[REQ_URI_FID] = attribute_data->httpRequestUriOffset;
                 appIdSession->hsession->fieldEndOffset[REQ_URI_FID] = attribute_data->httpRequestUriEndOffset;
-                appIdSession->scan_flags |= SCAN_HTTP_URI_FLAG;
                 attribute_data->httpRequestUri = NULL;
                 if (app_id_debug_session_flag)
                     _dpd.logMsg("AppIdDbg %s HTTP URI (%u-%u) is %s\n", app_id_debug_session, appIdSession->hsession->fieldOffset[REQ_URI_FID], appIdSession->hsession->fieldEndOffset[REQ_URI_FID], appIdSession->hsession->uri);
@@ -4626,13 +3650,6 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
         //========================================
         // Begin common HTTP component field data
         //========================================
-        if (attribute_data->httpRequestMethod)
-        {
-            if (app_id_debug_session_flag)
-                _dpd.logMsg("AppIdDbg %s HTTP request method is %s\n", app_id_debug_session, attribute_data->httpRequestMethod);
-            if (!strcmp(attribute_data->httpRequestMethod, "CONNECT"))
-                setAppIdFlag(appIdSession, APPID_SESSION_HTTP_CONNECT);
-        }
         if (attribute_data->httpRequestVia)
         {
             if (appIdSession->hsession->via)
@@ -4710,7 +3727,7 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
         {
             if (app_id_debug_session_flag)
                 _dpd.logMsg("AppIdDbg %s HTTP response upgrade is %s\n", app_id_debug_session, attribute_data->httpResponseUpgrade);
-            if (appidStaticConfig->http2_detection_enabled)
+            if (appidStaticConfig.http2_detection_enabled)
                 if (appIdSession->hsession->response_code && (strncmp(appIdSession->hsession->response_code, "101", 3) == 0))
                     if (strncmp(attribute_data->httpResponseUpgrade, "h2c", 3) == 0)
                     {
@@ -4836,7 +3853,7 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
     {
         if (!appIdSession->hsession)
         {
-            if (!(appIdSession->hsession = _dpd.snortAlloc(1, sizeof(*appIdSession->hsession), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+            if (!(appIdSession->hsession = calloc(1, sizeof(*appIdSession->hsession))))
                 DynamicPreprocessorFatalMessage("Could not allocate httpSession data");
         }
         if (!appIdSession->hsession->url)
@@ -4849,7 +3866,7 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
             }
         }
 
-        if (!appidStaticConfig->referred_appId_disabled && !appIdSession->hsession->referer)
+        if (!appidStaticConfig.referred_appId_disabled && !appIdSession->hsession->referer)
         {
             if (attribute_data->httpRequestReferer)
             {
@@ -4858,28 +3875,7 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
             }
         }
 
-        if (!appIdSession->hsession->useragent)
-        {
-            if (attribute_data->httpRequestUserAgent)
-            {
-                appIdSession->hsession->useragent = attribute_data->httpRequestUserAgent;
-                appIdSession->hsession->useragent_buflen = attribute_data->httpRequestUserAgentLen;
-                attribute_data->httpRequestUserAgent = NULL;
-                appIdSession->scan_flags |= SCAN_HTTP_USER_AGENT_FLAG;
-            }
-        }
-
-        if ((appIdSession->scan_flags & SCAN_HTTP_USER_AGENT_FLAG) && appIdSession->clientAppId <= APP_ID_NONE && appIdSession->hsession->useragent && (size = appIdSession->hsession->useragent_buflen) > 0)
-        {
-            identifyUserAgent((uint8_t *)appIdSession->hsession->useragent, size, &serviceAppId, &clientAppId, NULL, &pConfig->detectorHttpConfig);
-            setClientAppIdData(p, direction, appIdSession, clientAppId, NULL);
-            // do not overwrite a previously-set service
-            if (appIdSession->serviceAppId <= APP_ID_NONE)
-                setServiceAppIdData(p, direction, appIdSession, serviceAppId, NULL, NULL);
-            appIdSession->scan_flags &= ~SCAN_HTTP_USER_AGENT_FLAG;
-        }
-
-        if (appIdSession->hsession->url || (confidence == 100 && appIdSession->session_packet_count > appidStaticConfig->rtmp_max_packets))
+        if (appIdSession->hsession->url || (confidence == 100 && appIdSession->session_packet_count > appidStaticConfig.rtmp_max_packets))
         {
             if (appIdSession->hsession->url)
             {
@@ -4893,12 +3889,12 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
                 {
                     // do not overwrite a previously-set client or service
                     if (appIdSession->clientAppId <= APP_ID_NONE)
-                        setClientAppIdData(p, direction, appIdSession, clientAppId, NULL);
+                        setClientAppIdData(appIdSession, clientAppId, NULL);
                     if (appIdSession->serviceAppId <= APP_ID_NONE)
-                        setServiceAppIdData(p, direction, appIdSession, serviceAppId, NULL, NULL);
+                        setServiceAppIdData(appIdSession, serviceAppId, NULL, NULL);
 
                     // DO overwrite a previously-set payload
-                    setPayloadAppIdData(p, direction, appIdSession, payloadAppId, NULL);
+                    setPayloadAppIdData(appIdSession, payloadAppId, NULL);
                     setReferredPayloadAppIdData(appIdSession, referredPayloadAppId);
                 }
             }
@@ -4908,90 +3904,58 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
                 thirdparty_appid_module->disable_flags(appIdSession->tpsession, TP_SESSION_FLAG_ATTRIBUTE | TP_SESSION_FLAG_TUNNELING | TP_SESSION_FLAG_FUTUREFLOW);
                 thirdparty_appid_module->session_delete(appIdSession->tpsession, 1);
             }
+            appIdSession->tpsession = NULL;
             clearAppIdFlag(appIdSession, APPID_SESSION_APP_REINSPECT);
         }
     }
-    else if (getAppIdFlag(appIdSession, APPID_SESSION_SSL_SESSION))
+    else if (ThirdPartyAppIDFoundProto(APP_ID_SSL, proto_list))
     {
-        int reInspectSSLAppId = 0;
         tAppId tmpAppId = APP_ID_NONE;
-
-        if (app_id_debug_session_flag)
-            _dpd.logMsg("AppIdDbg %s flow is SSL\n", app_id_debug_session);
 
         if (thirdparty_appid_module && appIdSession->tpsession)
             tmpAppId = thirdparty_appid_module->session_appid_get(appIdSession->tpsession);
 
+        setAppIdFlag(appIdSession, APPID_SESSION_SSL_SESSION);
+
         if (!appIdSession->tsession)
         {
-            if (!(appIdSession->tsession = _dpd.snortAlloc(1, sizeof(*appIdSession->tsession), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+            if (!(appIdSession->tsession = calloc(1, sizeof(*appIdSession->tsession))))
                 DynamicPreprocessorFatalMessage("Could not allocate tlsSession data");
         }
 
         if (!appIdSession->clientAppId)
-            setClientAppIdData(p, direction, appIdSession, APP_ID_SSL_CLIENT, NULL);
-
-        reInspectSSLAppId = testSSLAppIdForReinspect(tmpAppId);
+            setClientAppIdData(appIdSession, APP_ID_SSL_CLIENT, NULL);
 
         if (attribute_data->tlsHost)
         {
-            /* This flag is to avoid NAVL overwritting SSL provided SNI */
-            if (!(appIdSession->scan_flags & SCAN_CERTVIZ_ENABLED_FLAG))
-            {
-                if (appIdSession->tsession->tls_host)
-                    free(appIdSession->tsession->tls_host);
-                appIdSession->tsession->tls_host = attribute_data->tlsHost;
-                attribute_data->tlsHost = NULL;
-                if (reInspectSSLAppId)
-                    appIdSession->scan_flags |= SCAN_SSL_HOST_FLAG;
-            }
-            else
-            {
-                free(attribute_data->tlsHost);
-                attribute_data->tlsHost = NULL;
-            }
+            if (appIdSession->tsession->tls_host)
+                free(appIdSession->tsession->tls_host);
+            appIdSession->tsession->tls_host = attribute_data->tlsHost;
+            attribute_data->tlsHost = NULL;
+            if (testSSLAppIdForReinspect(tmpAppId))
+                appIdSession->scan_flags |= SCAN_SSL_HOST_FLAG;
         }
-        if (attribute_data->tlsCname)
+        if (testSSLAppIdForReinspect(tmpAppId))
         {
-            /* This flag is to avoid NAVL overwritting SSL provided CN */
-            if (!(appIdSession->scan_flags & SCAN_CERTVIZ_ENABLED_FLAG))
+            if (attribute_data->tlsCname)
             {
                 if (appIdSession->tsession->tls_cname)
                     free(appIdSession->tsession->tls_cname);
                 appIdSession->tsession->tls_cname = attribute_data->tlsCname;
                 attribute_data->tlsCname = NULL;
-                if (reInspectSSLAppId)
-                    appIdSession->scan_flags |= SCAN_SSL_CERTIFICATE_FLAG;
             }
-            else
-            {
-                free(attribute_data->tlsCname);
-                attribute_data->tlsCname = NULL;
-            }
-        }
-        if (reInspectSSLAppId)
-        {
             if (attribute_data->tlsOrgUnit)
             {
-                /* This flag is to avoid NAVL overwritting SSL provided ORG */
-                if (!(appIdSession->scan_flags & SCAN_CERTVIZ_ENABLED_FLAG))
-                {
-                    if (appIdSession->tsession->tls_orgUnit)
-                        free(appIdSession->tsession->tls_orgUnit);
-                    appIdSession->tsession->tls_orgUnit = attribute_data->tlsOrgUnit;
-                    attribute_data->tlsOrgUnit = NULL;
-                }
-                else
-                {
-                    free(attribute_data->tlsOrgUnit);
-                    attribute_data->tlsOrgUnit = NULL;
-                }
+                if (appIdSession->tsession->tls_orgUnit)
+                    free(appIdSession->tsession->tls_orgUnit);
+                appIdSession->tsession->tls_orgUnit = attribute_data->tlsOrgUnit;
+                attribute_data->tlsOrgUnit = NULL;
             }
         }
     }
     else if (ThirdPartyAppIDFoundProto(APP_ID_FTP_CONTROL, proto_list))
     {
-        if (!appidStaticConfig->ftp_userid_disabled && attribute_data->ftpCommandUser)
+        if (!appidStaticConfig.ftp_userid_disabled && attribute_data->ftpCommandUser)
         {
             if (appIdSession->username)
                 free(appIdSession->username);
@@ -5001,52 +3965,6 @@ static inline void ProcessThirdPartyResults(SFSnortPacket* p, APPID_SESSION_DIRE
             setAppIdFlag(appIdSession, APPID_SESSION_LOGIN_SUCCEEDED);
         }
     }
-}
-
-void appSetServiceDetectorCallback(RNAServiceCallbackFCN fcn, tAppId appId, struct _Detector *userdata, tAppIdConfig *pConfig)
-{
-#ifdef TARGET_BASED
-    AppInfoTableEntry* entry;
-
-    if ((entry = appInfoEntryGet(appId, pConfig)))
-    {
-        if (entry->svrValidator)
-        {
-            if (entry->flags & APPINFO_FLAG_SERVICE_DETECTOR_CALLBACK)
-            {
-                _dpd.errMsg("AppId: Service detector callback already registerted for appid %d\n", appId);
-                return;
-            }
-            entry->svrValidator->userdata = userdata;
-            entry->svrValidator->detectorCallback = fcn;
-            entry->flags |= APPINFO_FLAG_SERVICE_DETECTOR_CALLBACK;
-        }
-    }
-#endif
-    return;
-}
-
-void appSetClientDetectorCallback(RNAClientAppCallbackFCN fcn, tAppId appId, struct _Detector *userdata, tAppIdConfig *pConfig)
-{
-#ifdef TARGET_BASED
-    AppInfoTableEntry* entry;
-
-    if ((entry = appInfoEntryGet(appId, pConfig)))
-    {
-        if (entry->clntValidator)
-        {
-            if (entry->flags & APPINFO_FLAG_CLIENT_DETECTOR_CALLBACK)
-            {
-                _dpd.errMsg("AppId: Client detector callback already registerted for appid %d\n", appId);
-		return;
-            }
-            entry->clntValidator->userData = userdata;
-            entry->clntValidator->detectorCallback = fcn;
-            entry->flags |= APPINFO_FLAG_CLIENT_DETECTOR_CALLBACK;
-        }
-    }
-#endif
-    return;
 }
 
 void appSetServiceValidator(RNAServiceValidationFCN fcn, tAppId appId, unsigned extractsInfo, tAppIdConfig *pConfig)
@@ -5072,7 +3990,6 @@ void appSetServiceValidator(RNAServiceValidationFCN fcn, tAppId appId, unsigned 
 
 void appSetLuaServiceValidator(RNAServiceValidationFCN fcn, tAppId appId, unsigned extractsInfo, struct _Detector *data)
 {
-#ifdef TARGET_BASED
     AppInfoTableEntry *entry;
     tAppIdConfig *pConfig = appIdNewConfigGet();
 
@@ -5098,7 +4015,6 @@ void appSetLuaServiceValidator(RNAServiceValidationFCN fcn, tAppId appId, unsign
     {
         _dpd.errMsg("Invalid direct service AppId, %d, for %p %p\n",appId, fcn, data);
     }
-#endif
 }
 
 void appSetClientValidator(RNAClientAppFCN fcn, tAppId appId, unsigned extractsInfo, tAppIdConfig *pConfig)
@@ -5168,11 +4084,11 @@ void AppIdAddUser(tAppIdData *flowp, const char *username, tAppId appId, int suc
 void AppIdAddDnsQueryInfo(tAppIdData *flow,
                           uint16_t id,
                           const uint8_t *host, uint8_t host_len, uint16_t host_offset,
-                          uint16_t record_type, uint16_t options_offset)
+                          uint16_t record_type)
 {
     if (!flow->dsession)
     {
-        if (!(flow->dsession = _dpd.snortAlloc(1, sizeof(*flow->dsession), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+        if (!(flow->dsession = calloc(1, sizeof(*flow->dsession))))
             DynamicPreprocessorFatalMessage("Could not allocate dnsSession data");
     }
     else if ((flow->dsession->state != 0) && (flow->dsession->id != id))
@@ -5182,7 +4098,7 @@ void AppIdAddDnsQueryInfo(tAppIdData *flow,
 
     if (flow->dsession->state & DNS_GOT_QUERY)
         return;
-    flow->dsession->state = DNS_GOT_QUERY;    // clears any response state
+    flow->dsession->state |= DNS_GOT_QUERY;
 
     flow->dsession->id          = id;
     flow->dsession->record_type = record_type;
@@ -5194,7 +4110,6 @@ void AppIdAddDnsQueryInfo(tAppIdData *flow,
             flow->dsession->host_len    = host_len;
             flow->dsession->host_offset = host_offset;
             flow->dsession->host        = dns_parse_host(host, host_len);
-            flow->dsession->options_offset = options_offset;
         }
     }
 }
@@ -5206,7 +4121,7 @@ void AppIdAddDnsResponseInfo(tAppIdData *flow,
 {
     if (!flow->dsession)
     {
-        if (!(flow->dsession = _dpd.snortAlloc(1, sizeof(*flow->dsession), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+        if (!(flow->dsession = calloc(1, sizeof(*flow->dsession))))
             DynamicPreprocessorFatalMessage("Could not allocate dnsSession data");
     }
     else if ((flow->dsession->state != 0) && (flow->dsession->id != id))
@@ -5244,44 +4159,9 @@ void AppIdResetDnsInfo(tAppIdData *flow)
 
 void AppIdAddPayload(tAppIdData *flow, tAppId payload_id)
 {
-    if (appidStaticConfig->instance_id)
+    if (appidStaticConfig.instance_id)
         checkSandboxDetection(payload_id);
     flow->payloadAppId = payload_id;
-}
-
-void AppIdAddMultiPayload(tAppIdData *flow, tAppId payload_id)
-{
-    if (appidStaticConfig->instance_id)
-        checkSandboxDetection(payload_id);
-    flow->payloadAppId = payload_id;
-
-    if (flow->multiPayloadList && sfghash_find_node(flow->multiPayloadList, (const void*)&payload_id))
-        return;
-
-    if (!flow->multiPayloadList)
-        flow->multiPayloadList = sfghash_new(4, sizeof(tAppId), 0, NULL);
-
-    sfghash_add(flow->multiPayloadList, (const void *)&payload_id, (void *)NEW_PAYLOAD_STATE);
-
-    if (app_id_debug_session_flag)
-    {
-        SFGHASH_NODE *n;
-        int buf_index = 0;
-        int size = 0;
-        tAppId cur;
-        char b[MULTI_BUF_SIZE];
-
-        for (n = sfghash_findfirst(flow->multiPayloadList);
-             n != 0 && size != -1;)
-        {
-            cur = *((tAppId*)n->key);
-            size = sprintf(b+buf_index, "%d ", cur);
-            buf_index+=size;
-            n = sfghash_findnext(flow->multiPayloadList);
-        }
-
-        _dpd.logMsg("AppIdDbg %s service %d; adding payload %d to multipayload on packet %d.\n Mulipayload includes: %s\n", app_id_debug_session, flow->serviceAppId, payload_id, flow->session_packet_count, b);
-    }
 }
 
 tAppId getOpenAppId(void *ssnptr)
@@ -5335,95 +4215,6 @@ int sslAppGroupIdLookup(void *ssnptr, const char * serverName, const char * comm
     return 0;
 }
 
-/*
- * In TLS 1.3, certificates come encrypted, hence SSL module does the
- * certificate decryption and provides the SNI/first-SAN/CN/ON to AppId module.
- * This API does the following:
- *  1. AppIds detection corresponding to the SNI/first-SAN/CN/ON
- *  2. Store the AppIds and SNI/first-SAN/CN/ON in AppID session struct.
- *  3. To make sure the SSL provided SNI/first-SAN/CN/ON are not further overwritten
- *      by NAVL, appropriate flags are set.
- * Note:
- * Valid SNI:              SNI->first_SAN->CN->OU
- * No SNI/Mismatched SNI:  first_SAN->CN->OU
- */
-void setTlsHost(void *ssnptr, const char *serverName, const char *commonName,
-                const char *orgName, const char *subjectAltName, bool isSniMismatch,
-                tAppId *serviceAppId, tAppId *clientAppId, tAppId *payloadAppId)
-{
-    tAppIdData *session;
-    *serviceAppId = *clientAppId = *payloadAppId = APP_ID_NONE;
-
-    if (app_id_debug_session_flag)
-        _dpd.logMsg("Received serverName=%s, commonName=%s, orgName=%s, subjectAltName=%s, isSniMismatch=%s, from SSL\n",
-                serverName, commonName, orgName, subjectAltName, isSniMismatch?"true":"false");
-
-    if (ssnptr && (session = getAppIdData(ssnptr)))
-    {
-        if (!session->tsession)
-            session->tsession = _dpd.snortAlloc(1, sizeof(*session->tsession),
-                    PP_APP_ID, PP_MEM_CATEGORY_SESSION);
-
-        session->scan_flags |= SCAN_SSL_HOST_FLAG;
-        session->scan_flags |= SCAN_SSL_CERTIFICATE_FLAG;
-        session->scan_flags |= SCAN_CERTVIZ_ENABLED_FLAG;
-        if (isSniMismatch)
-            session->scan_flags |= SCAN_SPOOFED_SNI_FLAG;
-
-        if (serverName && !isSniMismatch)
-        {
-            if (session->tsession->tls_host)
-                free(session->tsession->tls_host);
-            session->tsession->tls_host = strdup(serverName);
-            session->tsession->tls_host_strlen = strlen(serverName);
-        }
-
-        if (subjectAltName)
-        {
-            if (session->tsession->tls_first_san)
-                free(session->tsession->tls_first_san);
-            session->tsession->tls_first_san = strdup(subjectAltName);
-            session->tsession->tls_first_san_strlen = strlen(subjectAltName);
-        }
-
-        if (commonName)
-        {
-            if (session->tsession->tls_cname)
-                free(session->tsession->tls_cname);
-            session->tsession->tls_cname = strdup(commonName);
-            session->tsession->tls_cname_strlen = strlen(commonName);
-        }
-
-        if (orgName)
-        {
-            if (session->tsession->tls_orgUnit)
-                free(session->tsession->tls_orgUnit);
-            session->tsession->tls_orgUnit = strdup(orgName);
-            session->tsession->tls_orgUnit_strlen = strlen(orgName);
-        }
-
-        (void)scanSslParamsLookupAppId(session, (const char*)session->tsession->tls_host,
-                isSniMismatch, (const char*)session->tsession->tls_first_san,
-                (const char*)session->tsession->tls_cname,
-                (const char*)session->tsession->tls_orgUnit, clientAppId, payloadAppId);
-    
-        *serviceAppId = pickServiceAppId(session);
-        if (APP_ID_NONE == *clientAppId)
-            *clientAppId = pickClientAppId(session);
-
-        if (APP_ID_NONE == *payloadAppId)
-            *payloadAppId = pickPayloadId(session);
-
-        session->serviceAppId = *serviceAppId;
-        session->clientAppId  = *clientAppId;
-        session->payloadAppId = *payloadAppId;
-
-        if (app_id_debug_session_flag)
-            _dpd.logMsg("serviceAppId %d, clientAppId %d, payloadAppId %d\n",
-                    session->serviceAppId, session->clientAppId, session->payloadAppId);
-    }
-}
-
 void httpHeaderCallback (SFSnortPacket *p, HttpParsedHeaders *const headers)
 {
     tAppIdData *session;
@@ -5456,7 +4247,7 @@ void httpHeaderCallback (SFSnortPacket *p, HttpParsedHeaders *const headers)
 
     if (!session->hsession)
     {
-        if (!(session->hsession = _dpd.snortAlloc(1, sizeof(*session->hsession), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+        if (!(session->hsession = calloc(1, sizeof(*session->hsession))))
             DynamicPreprocessorFatalMessage("Could not allocate httpSession data");
     }
 
@@ -5479,11 +4270,6 @@ void httpHeaderCallback (SFSnortPacket *p, HttpParsedHeaders *const headers)
                     strncat(session->hsession->url, (char *)headers->host.start, headers->host.len);
                     strncat(session->hsession->url, (char *)headers->url.start, headers->url.len);
                     session->scan_flags |= SCAN_HTTP_HOST_URL_FLAG;
-                }
-                else
-                {
-                     DynamicPreprocessorFatalMessage("httpHeaderCallback: "
-                             "Failed to allocate memory for URL in APP_ID session header\n");
                 }
             }
         }
@@ -5542,7 +4328,7 @@ void httpHeaderCallback (SFSnortPacket *p, HttpParsedHeaders *const headers)
     _dpd.streamAPI->set_application_id(p->stream_session, pickServiceAppId(session), pickClientAppId(session), pickPayloadId(session), pickMiscAppId(session));
 }
 
-static inline void ExamineRtmpMetadata(SFSnortPacket *p, APPID_SESSION_DIRECTION direction, tAppIdData *appIdSession)
+static inline void ExamineRtmpMetadata(tAppIdData *appIdSession)
 {
     tAppId serviceAppId = 0;
     tAppId clientAppId = 0;
@@ -5554,7 +4340,7 @@ static inline void ExamineRtmpMetadata(SFSnortPacket *p, APPID_SESSION_DIRECTION
 
     if (!appIdSession->hsession)
     {
-        if (!(appIdSession->hsession = _dpd.snortAlloc(1, sizeof(*appIdSession->hsession), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+        if (!(appIdSession->hsession = calloc(1, sizeof(*appIdSession->hsession))))
             DynamicPreprocessorFatalMessage("Could not allocate httpSession data");
     }
 
@@ -5572,12 +4358,12 @@ static inline void ExamineRtmpMetadata(SFSnortPacket *p, APPID_SESSION_DIRECTION
         {
             /* do not overwrite a previously-set client or service */
             if (appIdSession->clientAppId <= APP_ID_NONE)
-                setClientAppIdData(p, direction, appIdSession, clientAppId, NULL);
+                setClientAppIdData(appIdSession, clientAppId, NULL);
             if (appIdSession->serviceAppId <= APP_ID_NONE)
-                setServiceAppIdData(p, direction, appIdSession, serviceAppId, NULL, NULL);
+                setServiceAppIdData(appIdSession, serviceAppId, NULL, NULL);
 
             /* DO overwrite a previously-set payload */
-            setPayloadAppIdData(p, direction, appIdSession, payloadAppId, NULL);
+            setPayloadAppIdData(appIdSession, payloadAppId, NULL);
             setReferredPayloadAppIdData(appIdSession, referredPayloadAppId);
         }
     }
@@ -5588,7 +4374,7 @@ void checkSandboxDetection(tAppId appId)
     AppInfoTableEntry *entry;
     tAppIdConfig *pConfig = appIdActiveConfigGet();
 
-    if (appidStaticConfig->instance_id && pConfig)
+    if (appidStaticConfig.instance_id && pConfig)
     {
         entry = appInfoEntryGet(appId, pConfig);
         if (entry && entry->flags & APPINFO_FLAG_ACTIVE)

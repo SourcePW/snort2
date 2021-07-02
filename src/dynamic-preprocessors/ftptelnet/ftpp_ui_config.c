@@ -1,7 +1,7 @@
 /*
  * ftpp_ui_config.c
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2004-2013 Sourcefire, Inc.
  * Steven A. Sturges <ssturges@sourcefire.com>
  * Daniel J. Roelker <droelker@sourcefire.com>
@@ -53,7 +53,6 @@
 #include "ftp_cmd_lookup.h"
 #include "ftp_bounce_lookup.h"
 #include "ftpp_ui_config.h"
-#include "memory_stats.h"
 
 /*
  * Function: ftpp_ui_config_init_global_conf(FTPTELNET_GLOBAL_CONF *GlobalConf)
@@ -200,12 +199,9 @@ void ftpp_ui_config_reset_ftp_cmd_date_format(FTP_DATE_FMT *DateFmt)
 
     if (DateFmt->format_string)
     {
-        _dpd.snortFree(DateFmt->format_string,
-                       (strlen(DateFmt->format_string) + 1),
-                       PP_FTPTELNET, PP_MEM_CATEGORY_CONFIG);
+        free(DateFmt->format_string);
     }
-    _dpd.snortFree(DateFmt, sizeof(FTP_DATE_FMT),
-                   PP_FTPTELNET, PP_MEM_CATEGORY_CONFIG);
+    free(DateFmt);
 }
 
 /*
@@ -231,9 +227,7 @@ void ftpp_ui_config_reset_ftp_cmd_format(FTP_PARAM_FMT *ThisFmt)
         {
             ftpp_ui_config_reset_ftp_cmd_format(ThisFmt->choices[i]);
         }
-        _dpd.snortFree(ThisFmt->choices,
-                       (ThisFmt->numChoices * sizeof(FTP_PARAM_FMT *)),
-                       PP_FTPTELNET, PP_MEM_CATEGORY_CONFIG);
+        free(ThisFmt->choices);
     }
 
     if (ThisFmt->next_param_fmt)
@@ -251,14 +245,11 @@ void ftpp_ui_config_reset_ftp_cmd_format(FTP_PARAM_FMT *ThisFmt)
     }
     if (ThisFmt->type == e_literal)
     {
-        _dpd.snortFree(ThisFmt->format.literal,
-                       (strlen(ThisFmt->format.literal) + 1),
-                       PP_FTPTELNET, PP_MEM_CATEGORY_CONFIG);
+        free (ThisFmt->format.literal);
     }
 
     memset(ThisFmt, 0, sizeof(FTP_PARAM_FMT));
-    _dpd.snortFree(ThisFmt, sizeof(FTP_PARAM_FMT),
-                   PP_FTPTELNET, PP_MEM_CATEGORY_CONFIG);
+    free(ThisFmt);
 }
 
 /*

@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2007-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -868,7 +868,6 @@ int add_detection_option_tree(SnortConfig *sc, detection_option_tree_node_t *opt
     return DETECTION_OPTION_NOT_EQUAL;
 }
 
-
 uint64_t rule_eval_pkt_count = 0;
 
 /* Include "detection_leaf_node.c"
@@ -1011,7 +1010,6 @@ int detection_option_node_evaluate(detection_option_tree_node_t *node, detection
                         pattern_size = pmd->pattern_size;
 
                     // See "detection_leaf_node.c" (detection_leaf_node_eval).
-#ifdef TARGET_BASED
                     switch (detection_leaf_node_eval (node, eval_data))
                     {
                         case Leaf_Abort:
@@ -1028,15 +1026,14 @@ int detection_option_node_evaluate(detection_option_tree_node_t *node, detection
                             NODE_PROFILE_TMPSTART(node);
                             break;
                     }
-#endif
 
                     if (eval_rtn_result)
                     {
-			    if ((!otn->detection_filter) ||
-                                 !detection_filter_test(
+                            if ((!otn->detection_filter) ||
+			        !detection_filter_test(
                                  otn->detection_filter,
                                  GET_SRC_IP(eval_data->p), GET_DST_IP(eval_data->p),
-                                 eval_data->p->pkth->ts.tv_sec, eval_data))
+                                 eval_data->p->pkth->ts.tv_sec, eval_data, otn))
                         {
 #ifdef PERF_PROFILING
                             if (PROFILING_RULES)
@@ -1294,8 +1291,8 @@ int detection_option_node_evaluate(detection_option_tree_node_t *node, detection
                 if (child_node->option_type == RULE_OPTION_TYPE_LEAF_NODE)
                 {
                     /* Leaf node won't have any children but will return success
-                     * or failure; regardless we must count them here */ 
-                    result += 1;
+                     * or failure */
+                    result += child_node->result;
                 }
                 else if (child_node->result == child_node->num_children)
                 {

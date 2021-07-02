@@ -85,8 +85,6 @@ bin_PROGRAMS = snort$(EXEEXT)
 @BUILD_SIDE_CHANNEL_TRUE@side-channel/plugins/libsscm.a
 
 @BUILD_SIDE_CHANNEL_TRUE@am__append_3 = side-channel
-@BUILD_SNORT_RELOAD_TRUE@am__append_4 = reload-adjust/libreload_adjust.a
-@BUILD_SNORT_RELOAD_TRUE@am__append_5 = reload-adjust
 subdir = src
 DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/Makefile.am
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
@@ -116,11 +114,9 @@ am__snort_SOURCES_DIST = cdefs.h event.h generators.h sf_protocols.h \
 	ppm.h pcap_pkthdr32.h cpuclock.h sf_types.h log_text.c \
 	log_text.h detection_filter.c detection_filter.h \
 	detection_util.c detection_util.h rate_filter.c rate_filter.h \
-	pkt_tracer.c pkt_tracer.h obfuscation.c obfuscation.h \
-	rule_option_types.h sfdaq.c sfdaq.h reload.c reload.h \
-	reload_api.h idle_processing.c idle_processing.h \
-	idle_processing_funcs.h appIdApi.h reg_test.h reg_test.c \
-	memory_stats.h memory_stats.c dump.c dump.h
+	obfuscation.c obfuscation.h rule_option_types.h sfdaq.c \
+	sfdaq.h idle_processing.c idle_processing.h \
+	idle_processing_funcs.h appIdApi.h dump.c dump.h
 @BUILD_SNPRINTF_TRUE@am__objects_1 = snprintf.$(OBJEXT)
 @BUILD_CONTROL_SOCKET_TRUE@am__objects_2 = dump.$(OBJEXT)
 am_snort_OBJECTS = debug.$(OBJEXT) decode.$(OBJEXT) encode.$(OBJEXT) \
@@ -135,9 +131,8 @@ am_snort_OBJECTS = debug.$(OBJEXT) decode.$(OBJEXT) encode.$(OBJEXT) \
 	event_wrapper.$(OBJEXT) event_queue.$(OBJEXT) ppm.$(OBJEXT) \
 	log_text.$(OBJEXT) detection_filter.$(OBJEXT) \
 	detection_util.$(OBJEXT) rate_filter.$(OBJEXT) \
-	pkt_tracer.$(OBJEXT) obfuscation.$(OBJEXT) sfdaq.$(OBJEXT) \
-	reload.$(OBJEXT) idle_processing.$(OBJEXT) reg_test.$(OBJEXT) \
-	memory_stats.$(OBJEXT) $(am__objects_2)
+	obfuscation.$(OBJEXT) sfdaq.$(OBJEXT) \
+	idle_processing.$(OBJEXT) $(am__objects_2)
 snort_OBJECTS = $(am_snort_OBJECTS)
 snort_DEPENDENCIES = output-plugins/libspo.a \
 	detection-plugins/libspd.a dynamic-plugins/libdynamic.a \
@@ -147,7 +142,7 @@ snort_DEPENDENCIES = output-plugins/libspo.a \
 	preprocessors/Session/libsession.a \
 	preprocessors/Stream6/libstream6.a sfutil/libsfutil.a \
 	control/libsfcontrol.a file-process/libfileAPI.a \
-	file-process/libs/libfile.a $(am__append_2) $(am__append_4)
+	file-process/libs/libfile.a $(am__append_2)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
 am__v_lt_0 = --silent
@@ -230,7 +225,7 @@ CTAGS = ctags
 DIST_SUBDIRS = sfutil win32 output-plugins detection-plugins \
 	dynamic-plugins preprocessors parser dynamic-preprocessors \
 	dynamic-output target-based control file-process \
-	dynamic-examples side-channel reload-adjust
+	dynamic-examples side-channel
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 am__relativize = \
   dir0=`pwd`; \
@@ -409,11 +404,9 @@ snort_SOURCES = cdefs.h event.h generators.h sf_protocols.h \
 	ppm.h pcap_pkthdr32.h cpuclock.h sf_types.h log_text.c \
 	log_text.h detection_filter.c detection_filter.h \
 	detection_util.c detection_util.h rate_filter.c rate_filter.h \
-	pkt_tracer.c pkt_tracer.h obfuscation.c obfuscation.h \
-	rule_option_types.h sfdaq.c sfdaq.h reload.c reload.h \
-	reload_api.h idle_processing.c idle_processing.h \
-	idle_processing_funcs.h appIdApi.h reg_test.h reg_test.c \
-	memory_stats.h memory_stats.c $(am__append_1)
+	obfuscation.c obfuscation.h rule_option_types.h sfdaq.c \
+	sfdaq.h idle_processing.c idle_processing.h \
+	idle_processing_funcs.h appIdApi.h $(am__append_1)
 snort_LDADD = output-plugins/libspo.a detection-plugins/libspd.a \
 	dynamic-plugins/libdynamic.a \
 	dynamic-output/plugins/liboutput.a preprocessors/libspp.a \
@@ -422,12 +415,12 @@ snort_LDADD = output-plugins/libspo.a detection-plugins/libspd.a \
 	preprocessors/Session/libsession.a \
 	preprocessors/Stream6/libstream6.a sfutil/libsfutil.a \
 	control/libsfcontrol.a file-process/libfileAPI.a \
-	file-process/libs/libfile.a $(am__append_2) $(am__append_4)
+	file-process/libs/libfile.a $(am__append_2)
 @BUILD_DYNAMIC_EXAMPLES_TRUE@EXAMPLES_DIR = dynamic-examples
 SUBDIRS = sfutil win32 output-plugins detection-plugins \
 	dynamic-plugins preprocessors parser dynamic-preprocessors \
 	dynamic-output target-based control file-process \
-	$(EXAMPLES_DIR) $(am__append_3) $(am__append_5)
+	$(EXAMPLES_DIR) $(am__append_3)
 all: all-recursive
 
 .SUFFIXES:

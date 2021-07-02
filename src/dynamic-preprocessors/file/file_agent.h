@@ -1,5 +1,5 @@
 /*
- ** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ ** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  ** Copyright (C) 2013-2013 Sourcefire, Inc.
  **
  **
@@ -46,7 +46,7 @@ typedef struct _FileInfo
 /* Initialize file processing.
  * This should be called when this preprocessor initialized (snort starts)
  */
-void file_agent_init(struct _SnortConfig *sc, void *);
+void file_agent_init(void *);
 
 /* Initialize file processing thread.
  * This should be called after initialization of daemon

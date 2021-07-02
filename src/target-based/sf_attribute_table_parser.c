@@ -6192,7 +6192,7 @@ int sfat_flex_debug = 0;
 char *sfattext;
 #line 1 "sf_attribute_table_parser.l"
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2006-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -7570,7 +7570,7 @@ YY_BUFFER_STATE sfat_scan_bytes  (yyconst char * yybytes, yy_size_t  _yybytes_le
 	YY_BUFFER_STATE b;
 	char *buf;
 	yy_size_t n;
-	yy_size_t i;
+	int i;
     
 	/* Get memory for full buffer, including space for trailing EOB's. */
 	n = _yybytes_len + 2;

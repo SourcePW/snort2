@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2003-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -59,9 +59,6 @@ OptTreeNode * GenerateSnortEventOtn(
 
 RuleTreeNode* GenerateSnortEventRtn(OptTreeNode *, tSfPolicyId);
 
-int GetSnortEventAction(uint32_t gid, uint32_t sid,
-                        uint32_t rev, uint32_t classification,
-                        uint32_t priority, const char *msg);
 int LogTagData(
     Packet * p,
     uint32_t gen_id,

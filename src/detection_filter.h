@@ -1,7 +1,7 @@
 /* $Id$ */
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2003-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -35,7 +35,7 @@
 
 #include "sfthreshold.h"
 #include "ipv6_port.h"
-
+#include "treenodes.h"
 typedef struct _DetectionFilterConfig
 {
     int count;
@@ -53,7 +53,7 @@ void detection_filter_cleanup( void );
 void detection_filter_print_config(DetectionFilterConfig *);
 void detection_filter_reset_active(void);
 
-int detection_filter_test(void*, sfaddr_t* sip, sfaddr_t* dip, long curtime, detection_option_eval_data_t *eval_data);
+int detection_filter_test(void*, sfaddr_t* sip, sfaddr_t* dip, long curtime, detection_option_eval_data_t *eval_data, OptTreeNode *otn);
 void * detection_filter_create(DetectionFilterConfig *, THDX_STRUCT *);
 
 #endif

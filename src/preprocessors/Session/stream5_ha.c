@@ -1,7 +1,7 @@
 /* $Id$ */
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2012-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -152,7 +152,6 @@ static StreamHAStats s5ha_stats;
 static HADebugSessionConstraints s5_ha_debug_info;
 static volatile int s5_ha_debug_flag = 0;
 static char s5_ha_debug_session[HA_DEBUG_SESSION_ID_SIZE];
-uint32_t HA_CRITICAL_SESSION_FLAGS = ( SSNFLAG_DROP_CLIENT | SSNFLAG_DROP_SERVER | SSNFLAG_RESET );
 
 #define IP6_SESSION_KEY_SIZE sizeof(SessionKey)
 #define IP4_SESSION_KEY_SIZE (IP6_SESSION_KEY_SIZE - 24)
@@ -782,11 +781,7 @@ void SessionHAInit( struct _SnortConfig *sc, char *args )
 
 #ifdef HAVE_DAQ_EXT_MODFLOW
     if (session_configuration->ha_config->use_daq)
-    {
         AddFuncToPreprocMetaEvalList(sc, SessionHAMetaEval, PP_SESSION_PRIORITY, PP_SESSION);
-        //Do not send delete notification on RST when there is a underlying data plane.
-        HA_CRITICAL_SESSION_FLAGS &= ~SSNFLAG_RESET;
-    }    
 #endif
 
     StreamPrintHAConfig(session_configuration->ha_config);
@@ -1053,10 +1048,6 @@ static int ConsumeHAMessage(const uint8_t *msg, uint32_t msglen)
 
     if (debug_flag)
         LogMessage("S5HADbg Consuming update message for %s\n", s5_ha_debug_session);
-
-    if (pkt_trace_enabled)
-        addPktTraceData(VERDICT_REASON_NO_BLOCK, snprintf(trace_line, MAX_TRACE_LINE,
-                     "Recovered session \n"));
 
     scb = api->get_lws(&key);
 
@@ -1473,16 +1464,11 @@ void SessionHANotifyDeletion(SessionControlBlock *scb)
         return;
     }
 
-#ifdef SIDE_CHANNEL
-    if (session_configuration->ha_config->use_side_channel)
-    {
-        debug_flag = StreamHADebugCheck(scb->key, s5_ha_debug_flag, &s5_ha_debug_info,
+    debug_flag = StreamHADebugCheck(scb->key, s5_ha_debug_flag, &s5_ha_debug_info,
                                      s5_ha_debug_session, sizeof(s5_ha_debug_session));
-        if (debug_flag)
-            LogMessage("S5HADbg Producing deletion message for %s\n",
-                       s5_ha_debug_session);
-    }
-#endif
+    if (debug_flag)
+        LogMessage("S5HADbg Producing deletion message for %s\n", s5_ha_debug_session);
+
 
     /* Calculate the size of the deletion message. */
     msg_size = CalculateHAMessageSize(HA_EVENT_DELETE, scb);
@@ -1496,22 +1482,16 @@ void SessionHANotifyDeletion(SessionControlBlock *scb)
         }
     }
 
-    if (session_configuration->ha_config->use_daq)
-    {
-        s5ha_stats.delete_messages_not_sent++;
-        PREPROC_PROFILE_END(sessionHAPerfStats);
-        return;
-    }
-
 #ifdef SIDE_CHANNEL
     if (session_configuration->ha_config->use_side_channel)
     {
         SendSCDeletionMessage(scb, msg_size);
     }
 #endif
-  
-    s5ha_stats.delete_messages_sent++;
+
     scb->ha_flags |= HA_FLAG_DELETED;
+
+    s5ha_stats.delete_messages_sent++;
 
     PREPROC_PROFILE_END(sessionHAPerfStats);
 }

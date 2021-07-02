@@ -3,7 +3,7 @@
 **
 ** perf-base.c
 **
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2002-2013 Sourcefire, Inc.
 ** Dan Roelker <droelker@sourcefire.com>
 ** Marc Norton <mnorton@sourcefire.com>
@@ -839,17 +839,14 @@ static void GetPacketsPerSecond(SFBASE *sfBase, SFBASE_STATS *sfBaseStats,
 static void GetuSecondsPerPacket(SFBASE *sfBase, SFBASE_STATS *sfBaseStats,
         SYSTIMES *Systimes)
 {
-    if(sfBase->total_packets)
-    {
-        sfBaseStats->usecs_per_packet.usertime   = (Systimes->usertime * 1.0e6) /
-            (double)sfBase->total_packets;
-        sfBaseStats->usecs_per_packet.systemtime = (Systimes->systemtime * 1.0e6) /
-            (double)sfBase->total_packets;
-        sfBaseStats->usecs_per_packet.totaltime  = (Systimes->totaltime * 1.0e6) /
-            (double)sfBase->total_packets;
-        sfBaseStats->usecs_per_packet.realtime   = (Systimes->realtime * 1.0e6) /
-            (double)sfBase->total_packets;
-    }
+    sfBaseStats->usecs_per_packet.usertime   = (Systimes->usertime * 1.0e6) /
+                                               (double)sfBase->total_packets;
+    sfBaseStats->usecs_per_packet.systemtime = (Systimes->systemtime * 1.0e6) /
+                                               (double)sfBase->total_packets;
+    sfBaseStats->usecs_per_packet.totaltime  = (Systimes->totaltime * 1.0e6) /
+                                               (double)sfBase->total_packets;
+    sfBaseStats->usecs_per_packet.realtime   = (Systimes->realtime * 1.0e6) /
+                                               (double)sfBase->total_packets;
 }
 
 static void GetMbitsPerSecond(SFBASE *sfBase, SFBASE_STATS *sfBaseStats,
@@ -1169,7 +1166,7 @@ static void GetPktDropStats(SFBASE *sfBase, SFBASE_STATS *sfBaseStats)
     else
     {
         const DAQ_Stats_t* ps = DAQ_GetStats();
-        recv = ps->hw_packets_received;
+        recv = ps->packets_received;
         drop = ps->hw_packets_dropped;
         if (perfmon_config->base_reset)
         {

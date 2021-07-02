@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -30,7 +30,7 @@
 
 #define GENERIC_APP_OFFSET 2000000000
 
-void ClientAppInit(tAppidStaticConfig* appidSC, tAppIdConfig *pConfig);
+void ClientAppInit(tAppIdConfig *pConfig);
 void ClientAppFinalize(tAppIdConfig *pConfig);
 void UnconfigureClientApp(tAppIdConfig *pConfig);
 void CleanupClientApp(tAppIdConfig *pConfig);
@@ -43,10 +43,10 @@ void ClientAppRegisterPattern(RNAClientAppFCN fcn, uint8_t proto,
 const ClientAppApi *getClientApi(void);
 RNAClientAppModuleConfig * getClientAppModuleConfig(const char *moduleName, tClientAppConfig *pConfig);
 int AppIdDiscoverClientApp(SFSnortPacket *p, int direction, tAppIdData *rnaData, const tAppIdConfig *pConfig);
-void AppIdAddClientApp(SFSnortPacket *p, int direction, const tAppIdConfig *pConfig, tAppIdData *flowp, tAppId service_id, tAppId id, const char *version);
+void AppIdAddClientApp(tAppIdData *flowp, tAppId service_id, tAppId id, const char *version);
 
 DetectorAppUrlList *getAppUrlList(tAppIdConfig *pConfig);
-tRNAClientAppModule *ClientAppGetClientAppModule(RNAClientAppFCN fcn, struct _Detector *userdata,
+const tRNAClientAppModule *ClientAppGetClientAppModule(RNAClientAppFCN fcn, struct _Detector *userdata,
                                                       tClientAppConfig *pConfig);
 
 int sipUaPatternAdd( 

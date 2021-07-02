@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -35,7 +35,7 @@ void luaModuleFini(void);
  * @param - pointer to new AppId context
  * @return None
  */
-void LoadLuaModules(tAppidStaticConfig* appidSC, tAppIdConfig *pConfig);
+void LoadLuaModules(tAppIdConfig *pConfig);
 
 /**
  * \brief Finalize Lua modules

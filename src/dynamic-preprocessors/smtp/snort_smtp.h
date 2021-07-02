@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2005-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -263,8 +263,9 @@ typedef struct _SMTP
      */
 
     tSfPolicyId policy_id;
-    uint32_t flow_id;
     tSfPolicyUserContextId config;
+    uint32_t flow_id;
+
 } SMTP;
 
 

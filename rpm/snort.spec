@@ -7,8 +7,8 @@
 #
 # See README.build_rpms for more details.
 #
-# 	--without openappid
-# 		exclude openAppId preprocessor
+# 	--with openappid
+# 		include openAppId preprocessor
 # See pg 399 of _Red_Hat_RPM_Guide_ for rpmbuild --with and --without options.
 ################################################################
 
@@ -17,9 +17,9 @@
 %define noShell /bin/false
 
 # Handle the options noted above.
-# Default with openAppId, but '--without openappid' will disable it
-%define openappid 1
-%{?_without_openappid:%define openappid 0}
+# Default of no openAppId, but --with openappid will enable it
+%define openappid 0
+%{?_with_openappid:%define openappid 1}
 
 %define vendor Snort.org
 %define for_distro RPMs
@@ -41,20 +41,18 @@
   %define release 1.caos
 %endif
 
-%if !%{openappid}
-  %define DisableOpenAppId --disable-open-appid
+%if %{openappid}
+  %define EnableOpenAppId --enable-open-appid
 %endif
 
 %if %{openappid}
 Name: %{realname}-openappid
-#FIXME: instead of pulling version here, add it in via the rpmbuild command. This will require documentation updates.
-Version: 2.9.18
+Version: 2.9.9.0
 Summary: An open source Network Intrusion Detection System (NIDS) with open AppId support
 Conflicts: %{realname}
 %else
 Name: %{realname}
-#FIXME: instead of pulling version here, add it in via the rpmbuild command. This will require documentation updates.
-Version: 2.9.18
+Version: 2.9.9.0
 Summary: An open source Network Intrusion Detection System (NIDS)
 Conflicts: %{realname}-openappid
 %endif
@@ -112,12 +110,12 @@ BuildSnort() {
    %__ln_s ../configure ./configure
 
    if [ "$1" = "plain" ] ; then
-       ./configure $SNORT_BASE_CONFIG \
-       %{?DisableOpenAppId}
+       ./configure $SNORT_BASE_CONFIG 
    fi
 
    if [ "$1" = "openappid" ] ; then
-       ./configure $SNORT_BASE_CONFIG
+       ./configure $SNORT_BASE_CONFIG \
+       %{?EnableOpenAppId}
    fi
 
    %__make
@@ -191,8 +189,8 @@ InstallSnort() {
    fi
    if [ "$1" = "openappid" ]; then
 	%__install -p -m 0755 "$1"/tools/u2openappid/u2openappid $RPM_BUILD_ROOT%{_bindir}/u2openappid
-	# This isn't built, it has to be copied from the source tree
-	%__install -p -m 0755 tools/appid_detector_builder.sh $RPM_BUILD_ROOT%{_bindir}/appid_detector_builder.sh
+        # This isn't built, it has to be copied from the source tree
+        %__install -p -m 0755 tools/appid_detector_builder.sh $RPM_BUILD_ROOT%{_bindir}/appid_detector_builder.sh
    fi
 }
 

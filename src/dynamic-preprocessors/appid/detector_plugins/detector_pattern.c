@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -682,17 +682,17 @@ static int service_validate(ServiceValidationArgs* args)
     id = csdPatternTreeSearch(data, size, flowp->proto, pkt, &service, false, args->pConfig);
     if (!id) goto fail;
 
-    pattern_service_mod.api->add_service(flowp, pkt, dir, &svc_element, id, NULL, NULL, NULL, NULL);
+    pattern_service_mod.api->add_service(flowp, pkt, dir, &svc_element, id, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 inprocess:
-    pattern_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element, NULL);
+    pattern_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 fail:
     pattern_service_mod.api->fail_service(flowp, pkt, dir, &svc_element,
                                           pattern_service_mod.flow_data_index,
-                                          args->pConfig, NULL);
+                                          args->pConfig);
     return SERVICE_NOMATCH;
 }
 
@@ -742,7 +742,7 @@ static CLIENT_APP_RETCODE client_validate(const uint8_t *data, uint16_t size, co
     id = csdPatternTreeSearch(data, size, flowp->proto, pkt, &service, true, (tAppIdConfig *)pConfig);
     if (!id) goto fail;
 
-    pattern_tcp_client_mod.api->add_app(pkt, dir, pConfig, flowp, id, id, NULL);
+    pattern_tcp_client_mod.api->add_app(flowp, id, id, NULL);
     return CLIENT_APP_SUCCESS;
 
 inprocess:

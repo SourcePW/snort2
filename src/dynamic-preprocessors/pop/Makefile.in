@@ -364,7 +364,6 @@ libsf_pop_preproc_la_SOURCES = pop_config.c pop_config.h pop_log.c \
 	pop_log.h pop_paf.c pop_paf.h pop_util.c pop_util.h \
 	snort_pop.c snort_pop.h spp_pop.c spp_pop.h $(am__append_1)
 EXTRA_DIST = \
-sf_pop.vcxproj \
 sf_pop.dsp
 
 all: all-am

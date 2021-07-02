@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -197,7 +197,7 @@ static int battle_field_validate(ServiceValidationArgs* args)
     
     battlefield_service_mod.api->fail_service(flowp, pkt, args->dir, &svc_element,
                                               battlefield_service_mod.flow_data_index,
-                                              args->pConfig, NULL);
+                                              args->pConfig);
     return SERVICE_NOMATCH;
 
 inprocess:
@@ -205,7 +205,7 @@ inprocess:
     if (fd->packetCount >= MAX_PACKET_INSPECTION_COUNT)
         goto fail;
 inprocess_nofd:
-    battlefield_service_mod.api->service_inprocess(flowp, pkt, args->dir, &svc_element, NULL);
+    battlefield_service_mod.api->service_inprocess(flowp, pkt, args->dir, &svc_element);
     return SERVICE_INPROCESS;
 
 success:
@@ -216,13 +216,13 @@ success:
     }
 
     battlefield_service_mod.api->add_service(flowp, pkt, args->dir, &svc_element,
-                                      APP_ID_BATTLEFIELD, NULL, NULL, NULL, NULL);
+                                      APP_ID_BATTLEFIELD, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 fail:
     battlefield_service_mod.api->fail_service(flowp, pkt, args->dir, &svc_element,
                                               battlefield_service_mod.flow_data_index,
-                                              args->pConfig, NULL);
+                                              args->pConfig);
     return SERVICE_NOMATCH;
 
 }

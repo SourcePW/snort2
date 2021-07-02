@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -218,22 +218,22 @@ static int lpr_validate(ServiceValidationArgs* args)
         goto bail;
     }
 inprocess:
-    lpr_service_mod.api->service_inprocess(flowp, args->pkt, dir, &svc_element, NULL);
+    lpr_service_mod.api->service_inprocess(flowp, args->pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 success:
     lpr_service_mod.api->add_service(flowp, args->pkt, dir, &svc_element,
-                                     APP_ID_PRINTSRV, NULL, NULL, NULL, NULL);
+                                     APP_ID_PRINTSRV, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 fail:
     lpr_service_mod.api->fail_service(flowp, args->pkt, dir, &svc_element,
-                                      lpr_service_mod.flow_data_index, args->pConfig, NULL);
+                                      lpr_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 
 bail:
     lpr_service_mod.api->incompatible_data(flowp, args->pkt, dir, &svc_element,
-                                           lpr_service_mod.flow_data_index, args->pConfig, NULL);
+                                           lpr_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOT_COMPATIBLE;
 }
 

@@ -16,7 +16,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2005-2013 Sourcefire, Inc.
  *
  * Author: Steve Sturges
@@ -70,7 +70,7 @@ int ByteDataInitialize(Rule *rule, ByteData *byte)
     {
         if (!rule->ruleData && !byte_math_var_check)
         {
-            DynamicEngineFatalMessage("ByteExtract or byte_math variable '%s' in rule [%d:%d] is used before it is defined.\n",
+            DynamicEngineFatalMessage("ByteExtract variable '%s' in rule [%d:%d] is used before it is defined.\n",
                                        byte->offset_refId, rule->info.genID, rule->info.sigID);
         }
 
@@ -86,7 +86,7 @@ int ByteDataInitialize(Rule *rule, ByteData *byte)
             if (!byte_math_var_check && (strcmp(bm_variable_name,byte->offset_refId)))
             {
 
-                 DynamicEngineFatalMessage("ByteExtract or byte_math variable '%s' in rule [%d:%d] is used before it is defined.\n",
+                 DynamicEngineFatalMessage("ByteExtract variable '%s' in rule [%d:%d] is used before it is defined.\n",
                                        byte->offset_refId, rule->info.genID, rule->info.sigID);
             }
         }
@@ -97,7 +97,7 @@ int ByteDataInitialize(Rule *rule, ByteData *byte)
     {
         if (!rule->ruleData && !byte_math_var_check)
         {
-            DynamicEngineFatalMessage("ByteExtract or byte_math variable '%s' in rule [%d:%d] is used before it is defined.\n",
+            DynamicEngineFatalMessage("ByteExtract variable '%s' in rule [%d:%d] is used before it is defined.\n",
                                        byte->value_refId, rule->info.genID, rule->info.sigID);
         }
 
@@ -241,12 +241,14 @@ int extractValueInternal(void *p, ByteData *byteData, uint32_t *value, const uin
     {
         if ( (byteData->bytes != 1) && (byteData->bytes != 2) && (byteData->bytes != 4) && (!(byteData->flags & JUMP_FROM_END)) )
         {
-            return -5;  /* We only support 1, 2, or 4 bytes if from_end is not set*/
+            return -5;  /* We only support 1, 2, or 4 bytes */
         }
 
-        /* Greater than 4 requires 'string' option */
-        if (byteData->bytes > 4)
-            return -2;
+        if (byteData->bytes < 1 || byteData->bytes > 4)
+        {
+            if ( (byteData->bytes == 0) && (!(byteData->flags & JUMP_FROM_END)) )
+                    return -2;
+        }
 
         if ( byteData->flags & BYTE_BIG_ENDIAN )
         {

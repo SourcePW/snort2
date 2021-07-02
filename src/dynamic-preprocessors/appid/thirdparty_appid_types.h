@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -68,7 +68,6 @@ typedef struct
     uint16_t httpRequestCookieLen;
     uint16_t httpRequestCookieOffset;
     uint16_t httpRequestCookieEndOffset;
-    char *httpRequestMethod;
     char *httpRequestVia;
     char *httpResponseVia;
     char *httpResponseUpgrade;

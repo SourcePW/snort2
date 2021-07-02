@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2008-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -30,7 +30,6 @@
 #include "dce2_utils.h"
 #include "dce2_config.h"
 #include "dce2_event.h"
-#include "memory_stats.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -445,42 +444,6 @@ static int DCE2_CheckMemcap(uint32_t size, DCE2_MemType mtype)
     return DCE2_MEMCAP_OK;
 }
 
-uint32_t check_memory_category (DCE2_MemType mtype)
-{
-    switch (mtype)
-    {
-        case DCE2_MEM_TYPE__CONFIG:
-        case DCE2_MEM_TYPE__ROPTION:
-            return PP_MEM_CATEGORY_CONFIG;
-        case DCE2_MEM_TYPE__RT:
-            return PP_MEM_CATEGORY_MISC;
-        case DCE2_MEM_TYPE__INIT:
-            return PP_MEM_CATEGORY_CONFIG;
-        case DCE2_MEM_TYPE__SMB_SSN:
-        case DCE2_MEM_TYPE__SMB_SEG:
-        case DCE2_MEM_TYPE__SMB_UID:
-        case DCE2_MEM_TYPE__SMB_TID:
-        case DCE2_MEM_TYPE__SMB_FID:
-        case DCE2_MEM_TYPE__SMB_FILE:
-        case DCE2_MEM_TYPE__SMB_REQ:
-        case DCE2_MEM_TYPE__TCP_SSN:
-        case DCE2_MEM_TYPE__CO_SEG:
-        case DCE2_MEM_TYPE__CO_FRAG:
-        case DCE2_MEM_TYPE__CO_CTX:
-        case DCE2_MEM_TYPE__UDP_SSN:
-        case DCE2_MEM_TYPE__CL_ACT:
-        case DCE2_MEM_TYPE__CL_FRAG:
-        case DCE2_MEM_TYPE__HTTP_SSN:
-            return PP_MEM_CATEGORY_SESSION;
-        default:
-            DCE2_Log(DCE2_LOG_TYPE__ERROR,
-                     "%s(%d) Invalid memory type: %d",
-                     __FILE__, __LINE__, mtype);
-            return PP_MEM_MAX_CATEGORY;
-     }
-    
-}
-
 /********************************************************************
  * Function:
  *
@@ -498,7 +461,7 @@ void * DCE2_Alloc(uint32_t size, DCE2_MemType mtype)
     if (DCE2_CheckMemcap(size, mtype) != DCE2_MEMCAP_OK)
         return NULL;
 
-    mem = _dpd.snortAlloc(1, (size_t)size, PP_DCE2, check_memory_category(mtype));
+    mem = calloc(1, (size_t)size);
     if (mem == NULL)
     {
         DCE2_Die("%s(%d) Out of memory!", __FILE__, __LINE__);
@@ -525,8 +488,7 @@ void DCE2_Free(void *mem, uint32_t size, DCE2_MemType mtype)
         return;
 
     DCE2_UnRegMem(size, mtype);
-
-    _dpd.snortFree(mem, (size_t)size, PP_DCE2, check_memory_category(mtype));
+    free(mem);
 }
 
 /********************************************************************
@@ -600,10 +562,5 @@ void * DCE2_ReAlloc(void *old_mem, uint32_t old_size, uint32_t new_size, DCE2_Me
 void DCE2_MemInit(void)
 {
     memset(&dce2_memory, 0, sizeof(dce2_memory));
-}
-
-size_t DCE2_MemInUse()
-{
-    return (size_t) dce2_memory.rtotal;
 }
 

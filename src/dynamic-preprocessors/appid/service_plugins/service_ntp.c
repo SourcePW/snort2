@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -145,16 +145,16 @@ static int ntp_validate(ServiceValidationArgs* args)
     }
 
     ntp_service_mod.api->add_service(flowp, args->pkt, args->dir, &svc_element,
-                                     APP_ID_NTP, NULL, NULL, NULL, NULL);
+                                     APP_ID_NTP, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 inprocess:
-    ntp_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element, NULL);
+    ntp_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element);
     return SERVICE_INPROCESS;
 
 fail:
     ntp_service_mod.api->fail_service(flowp, args->pkt, args->dir, &svc_element,
-                                      ntp_service_mod.flow_data_index, args->pConfig, NULL);
+                                      ntp_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 }
 

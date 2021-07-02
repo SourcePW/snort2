@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2008-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -40,8 +40,6 @@
 #include "smb.h"
 #include "sf_snort_packet.h"
 #include "sf_types.h"
-#include "stream_api.h"
-#include "session_api.h"
 #include "profiler.h"
 #include "snort_debug.h"
 #include "sf_dynamic_preprocessor.h"
@@ -97,8 +95,6 @@ typedef struct _DCE2_SmbComInfo
 
 } DCE2_SmbComInfo;
 
-unsigned smb_upload_ret_cb_id = 0;
-
 // Inline accessor functions for DCE2_SmbComInfo
 
 static inline bool DCE2_ComInfoIsResponse(const DCE2_SmbComInfo *com_info)
@@ -131,6 +127,11 @@ static inline uint16_t DCE2_ComInfoCommandSize(const DCE2_SmbComInfo *com_info)
     return com_info->cmd_size;
 }
 
+static inline bool DCE2_ComInfoIsCommandOK(const DCE2_SmbComInfo *com_info)
+{
+    return (com_info->cmd_error == DCE2_SMB_COM_ERROR__COMMAND_OK) ? true : false;
+}
+
 static inline bool DCE2_ComInfoIsStatusError(const DCE2_SmbComInfo *com_info)
 {
     return (com_info->cmd_error & DCE2_SMB_COM_ERROR__STATUS_ERROR) ? true : false;
@@ -139,6 +140,11 @@ static inline bool DCE2_ComInfoIsStatusError(const DCE2_SmbComInfo *com_info)
 static inline bool DCE2_ComInfoIsInvalidWordCount(const DCE2_SmbComInfo *com_info)
 {
     return (com_info->cmd_error & DCE2_SMB_COM_ERROR__INVALID_WORD_COUNT) ? true : false;
+}
+
+static inline bool DCE2_ComInfoIsInvalidByteCount(const DCE2_SmbComInfo *com_info)
+{
+    return (com_info->cmd_error & DCE2_SMB_COM_ERROR__INVALID_BYTE_COUNT) ? true : false;
 }
 
 static inline bool DCE2_ComInfoIsBadLength(const DCE2_SmbComInfo *com_info)
@@ -171,8 +177,7 @@ static bool smb_unusual_coms[SMB_MAX_NUM_COMS];
 
 // File name of the current file we are tracking for logging since the
 // file tracker may be gone before logging occurs.
-uint8_t smb_file_name[2*DCE2_SMB_MAX_PATH_LEN + UTF_16_LE_BOM_LEN + 2];
-uint16_t smb_file_name_len;
+char smb_file_name[DCE2_SMB_MAX_PATH_LEN+1];
 
 // Exported
 SmbAndXCom smb_chain_map[SMB_MAX_NUM_COMS];
@@ -703,13 +708,14 @@ static DCE2_SmbFileTracker * DCE2_SmbNewFileTracker(DCE2_SmbSsnData *,
 static void DCE2_SmbQueueTmpFileTracker(DCE2_SmbSsnData *,
         DCE2_SmbRequestTracker *, const uint16_t, const uint16_t);
 static inline DCE2_SmbFileTracker * DCE2_SmbGetTmpFileTracker(DCE2_SmbRequestTracker *);
+static inline void DCE2_SmbEmptyTmpFileTrackerQueue(DCE2_SmbRequestTracker *);
 static DCE2_SmbFileTracker * DCE2_SmbDequeueTmpFileTracker(DCE2_SmbSsnData *,
         DCE2_SmbRequestTracker *, const uint16_t);
 static inline DCE2_SmbFileTracker * DCE2_SmbGetFileTracker(DCE2_SmbSsnData *,
         const uint16_t);
 static DCE2_SmbFileTracker * DCE2_SmbFindFileTracker(DCE2_SmbSsnData *, const uint16_t,
         const uint16_t, const uint16_t);
-static DCE2_Ret DCE2_SmbRemoveFileTracker(DCE2_SmbSsnData *, DCE2_SmbFileTracker *);
+static void DCE2_SmbRemoveFileTracker(DCE2_SmbSsnData *, DCE2_SmbFileTracker *);
 static inline void DCE2_SmbCleanFileTracker(DCE2_SmbFileTracker *);
 static inline void DCE2_SmbCleanTransactionTracker(DCE2_SmbTransactionTracker *);
 static inline void DCE2_SmbCleanRequestTracker(DCE2_SmbRequestTracker *);
@@ -719,12 +725,11 @@ static void DCE2_SmbRequestTrackerDataFree(void *);
 static inline SFSnortPacket * DCE2_SmbGetRpkt(DCE2_SmbSsnData *, const uint8_t **,
         uint32_t *, DCE2_RpktType);
 static inline void DCE2_SmbReturnRpkt(void);
-static inline void DCE2_SmbSetFileName(uint8_t *, uint16_t);
-static uint8_t* DCE2_SmbGetString(const uint8_t *, uint32_t, bool, uint16_t *);
-static inline void DCE2_Update_Ftracker_from_ReqTracker(DCE2_SmbFileTracker *ftracker, DCE2_SmbRequestTracker *cur_rtracker);
+static inline void DCE2_SmbSetFileName(char *);
+static char * DCE2_SmbGetString(const uint8_t *, uint32_t, bool, bool);
 static inline void DCE2_SmbResetFileChunks(DCE2_SmbFileTracker *);
 static inline void DCE2_SmbAbortFileAPI(DCE2_SmbSsnData *);
-static inline DCE2_SmbRetransmitPending DCE2_SmbFinishFileAPI(DCE2_SmbSsnData *);
+static inline void DCE2_SmbFinishFileAPI(DCE2_SmbSsnData *);
 static inline void DCE2_SmbSetNewFileAPIFileTracker(DCE2_SmbSsnData *);
 static int DCE2_SmbFileOffsetCompare(const void *, const void *);
 static void DCE2_SmbFileChunkFree(void *);
@@ -902,9 +907,6 @@ void DCE2_SmbInitGlobals(void)
     memset(&smb_wcts, 0, sizeof(smb_wcts));
     memset(&smb_bccs, 0, sizeof(smb_bccs));
 
-    if (!smb_upload_ret_cb_id)
-        smb_upload_ret_cb_id = _dpd.streamAPI->register_event_handler(DCE2_Process_Retransmitted);
- 
     // Sets up the function to call for the command and valid word and byte
     // counts for the command.  Ensuring valid word and byte counts is very
     // important to processing the command as it will assume the command is
@@ -1821,9 +1823,7 @@ DCE2_SmbSsnData * DCE2_SmbSsnInit(SFSnortPacket *p)
     ssd->tid = DCE2_SENTINEL;
     ssd->ftracker.fid_v1 = DCE2_SENTINEL;
     ssd->rtracker.mid = DCE2_SENTINEL;
-    ssd->smbfound = false;
-    ssd->max_file_depth = _dpd.fileAPI->get_max_file_depth(_dpd.getCurrentSnortConfig(), false);
-    ssd->smbretransmit = false;
+    ssd->max_file_depth = _dpd.fileAPI->get_max_file_depth();
 
     DCE2_ResetRopts(&ssd->sd.ropts);
 
@@ -2649,14 +2649,6 @@ void DCE2_SmbProcess(DCE2_SmbSsnData *ssd)
     }
 
     smb_version = DCE2_Smb2Version(p);
-
-    if ((ssd->smbfound == false) && (smb_version != DCE2_SMB_VERISON_NULL))
-    {
-        _dpd.sessionAPI->disable_preproc_for_session( p->stream_session, PP_HTTPINSPECT);
-        DCE2_EnableDetect();
-        ssd->smbfound=true;
-    }
-
     if (smb_version == DCE2_SMB_VERISON_1)
     {
         if ((ssd->sd.flags & DCE2_SSN_FLAG__SMB2))
@@ -2678,7 +2670,6 @@ void DCE2_SmbProcess(DCE2_SmbSsnData *ssd)
         }
     }
 
-    ssd->max_file_depth = _dpd.fileAPI->get_max_file_depth(_dpd.getCurrentSnortConfig(), false);
     if (ssd->sd.flags & DCE2_SSN_FLAG__SMB2)
         DCE2_Smb2Process(ssd);
     else
@@ -2998,7 +2989,7 @@ static void DCE2_SmbProcessRawData(DCE2_SmbSsnData *ssd, const uint8_t *nb_ptr, 
     // Only one raw read/write allowed
     ssd->pdu_state = DCE2_SMB_PDU_STATE__COMMAND;
 
-    DCE2_SmbSetFileName(ftracker->file_name, ftracker->file_name_len);
+    DCE2_SmbSetFileName(ftracker->file_name);
 
     if (ftracker->is_ipc)
     {
@@ -3261,10 +3252,6 @@ static void DCE2_SmbProcessCommand(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr
         {
             _dpd.inlineDropPacket((void *)ssd->sd.wire_pkt);
             status = DCE2_RET__IGNORE;
-            if (*_dpd.pkt_tracer_enabled)
-                _dpd.addPktTrace(VERDICT_REASON_SMB, snprintf(_dpd.trace, _dpd.traceMax,
-                    "SMB: gid %u, server message block file drop\n", GENERATOR_DCE2));
-            else _dpd.addPktTrace(VERDICT_REASON_SMB, 0);
             break;
         }
 #endif
@@ -3450,10 +3437,6 @@ static void DCE2_SmbProcessCommand(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr
                         && (ssd->cur_rtracker->writeraw_remaining != 0))
                     return;
                 break;
-            /*This is to handle packet that got verdict as pending & will be put in retry queue */
-            case SMB_COM_CLOSE:
-                if (status == DCE2_RET__NOT_INSPECTED)
-                    return;
             default:
                 break;
         }
@@ -3986,7 +3969,8 @@ static DCE2_Ret DCE2_SmbOpen(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr,
         if (ftracker == NULL)
             return DCE2_RET__ERROR;
 
-        DCE2_Update_Ftracker_from_ReqTracker(ftracker, ssd->cur_rtracker);
+        ftracker->file_name = ssd->cur_rtracker->file_name;
+        ssd->cur_rtracker->file_name = NULL;
 
         if (!ftracker->is_ipc)
         {
@@ -4009,7 +3993,7 @@ static DCE2_Ret DCE2_SmbOpen(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr,
         DCE2_MOVE(nb_ptr, nb_len, 1);
 
         ssd->cur_rtracker->file_name =
-            DCE2_SmbGetString(nb_ptr, nb_len, SmbUnicode(smb_hdr), &ssd->cur_rtracker->file_name_len);
+            DCE2_SmbGetString(nb_ptr, nb_len, SmbUnicode(smb_hdr), false);
     }
 
 
@@ -4032,7 +4016,8 @@ static DCE2_Ret DCE2_SmbCreate(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr,
         if (ftracker == NULL)
             return DCE2_RET__ERROR;
 
-        DCE2_Update_Ftracker_from_ReqTracker(ftracker, ssd->cur_rtracker);
+        ftracker->file_name = ssd->cur_rtracker->file_name;
+        ssd->cur_rtracker->file_name = NULL;
 
         // Command creates or opens and truncates file to 0 so assume
         // upload.
@@ -4065,7 +4050,7 @@ static DCE2_Ret DCE2_SmbCreate(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr,
         DCE2_MOVE(nb_ptr, nb_len, 1);
 
         ssd->cur_rtracker->file_name =
-            DCE2_SmbGetString(nb_ptr, nb_len, SmbUnicode(smb_hdr), &ssd->cur_rtracker->file_name_len);
+            DCE2_SmbGetString(nb_ptr, nb_len, SmbUnicode(smb_hdr), false);
     }
 
     return DCE2_RET__SUCCESS;
@@ -4099,7 +4084,7 @@ static DCE2_Ret DCE2_SmbClose(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr,
     }
     else
     {
-        return DCE2_SmbRemoveFileTracker(ssd, ssd->cur_rtracker->ftracker);
+        DCE2_SmbRemoveFileTracker(ssd, ssd->cur_rtracker->ftracker);
     }
 
     return DCE2_RET__SUCCESS;
@@ -4262,7 +4247,8 @@ static DCE2_Ret DCE2_SmbCreateNew(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr,
         if (ftracker == NULL)
             return DCE2_RET__ERROR;
 
-        DCE2_Update_Ftracker_from_ReqTracker(ftracker, ssd->cur_rtracker);
+        ftracker->file_name = ssd->cur_rtracker->file_name;
+        ssd->cur_rtracker->file_name = NULL;
 
         // Command creates a new file so assume upload.
         if (!ftracker->is_ipc)
@@ -4294,7 +4280,7 @@ static DCE2_Ret DCE2_SmbCreateNew(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr,
         DCE2_MOVE(nb_ptr, nb_len, 1);
 
         ssd->cur_rtracker->file_name =
-            DCE2_SmbGetString(nb_ptr, nb_len, SmbUnicode(smb_hdr), &ssd->cur_rtracker->file_name_len);
+            DCE2_SmbGetString(nb_ptr, nb_len, SmbUnicode(smb_hdr), false);
     }
 
     return DCE2_RET__SUCCESS;
@@ -4967,7 +4953,8 @@ static DCE2_Ret DCE2_SmbOpenAndX(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr,
                 return DCE2_RET__ERROR;
         }
 
-        DCE2_Update_Ftracker_from_ReqTracker(ftracker, ssd->cur_rtracker);
+        ftracker->file_name = ssd->cur_rtracker->file_name;
+        ssd->cur_rtracker->file_name = NULL;
 
         if (!ftracker->is_ipc)
         {
@@ -5017,7 +5004,7 @@ static DCE2_Ret DCE2_SmbOpenAndX(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr,
         if (ssd->cur_rtracker->file_name == NULL)
         {
             ssd->cur_rtracker->file_name =
-                DCE2_SmbGetString(nb_ptr, nb_len, unicode, &ssd->cur_rtracker->file_name_len);
+                DCE2_SmbGetString(nb_ptr, nb_len, unicode, false);
         }
     }
 
@@ -5351,7 +5338,7 @@ static inline DCE2_Ret DCE2_SmbTrans2Open2Req(DCE2_SmbSsnData *ssd,
     DCE2_MOVE(param_ptr, param_len, sizeof(SmbTrans2Open2ReqParams));
 
     ssd->cur_rtracker->file_name =
-        DCE2_SmbGetString(param_ptr, param_len, unicode, &ssd->cur_rtracker->file_name_len);
+        DCE2_SmbGetString(param_ptr, param_len, unicode, false);
 
     return DCE2_RET__SUCCESS;
 }
@@ -5549,7 +5536,8 @@ static DCE2_Ret DCE2_SmbTransaction2(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_h
                 if (ftracker == NULL)
                     return DCE2_RET__ERROR;
 
-                DCE2_Update_Ftracker_from_ReqTracker(ftracker, ssd->cur_rtracker);
+                ftracker->file_name = ssd->cur_rtracker->file_name;
+                ssd->cur_rtracker->file_name = NULL;
 
                 if (!ftracker->is_ipc)
                 {
@@ -6696,7 +6684,7 @@ static inline DCE2_Ret DCE2_SmbNtTransactCreateReq(DCE2_SmbSsnData *ssd,
     DCE2_MOVE(param_ptr, param_len, pad);
 
     ssd->cur_rtracker->file_name =
-        DCE2_SmbGetString(param_ptr, file_name_length, unicode, &ssd->cur_rtracker->file_name_len);
+        DCE2_SmbGetString(param_ptr, file_name_length, unicode, false);
 
     return DCE2_RET__SUCCESS;
 }
@@ -6811,7 +6799,8 @@ static DCE2_Ret DCE2_SmbNtTransact(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_hdr
         if (ftracker == NULL)
             return DCE2_RET__ERROR;
 
-        DCE2_Update_Ftracker_from_ReqTracker(ftracker, ssd->cur_rtracker);
+        ftracker->file_name = ssd->cur_rtracker->file_name;
+        ssd->cur_rtracker->file_name = NULL;
 
         if (!ftracker->is_ipc)
         {
@@ -6926,7 +6915,8 @@ static DCE2_Ret DCE2_SmbNtCreateAndX(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_h
                 return DCE2_RET__ERROR;
         }
 
-        DCE2_Update_Ftracker_from_ReqTracker(ftracker, ssd->cur_rtracker);
+        ftracker->file_name = ssd->cur_rtracker->file_name;
+        ssd->cur_rtracker->file_name = NULL;
 
         DEBUG_WRAP(DCE2_DebugMsg(DCE2_DEBUG__SMB, "File name: %s\n",
                     (ftracker->file_name == NULL) ? "NULL" : ftracker->file_name));
@@ -6998,7 +6988,7 @@ static DCE2_Ret DCE2_SmbNtCreateAndX(DCE2_SmbSsnData *ssd, const SmbNtHdr *smb_h
         if (ssd->cur_rtracker->file_name == NULL)
         {
             ssd->cur_rtracker->file_name =
-                DCE2_SmbGetString(nb_ptr, file_name_length, unicode, &ssd->cur_rtracker->file_name_len);
+                DCE2_SmbGetString(nb_ptr, file_name_length, unicode, false);
         }
 
         if (is_ipc)
@@ -7032,7 +7022,7 @@ static inline DCE2_Ret DCE2_SmbProcessRequestData(DCE2_SmbSsnData *ssd,
     // Set this in case of chained commands or reassembled packet
     ssd->cur_rtracker->ftracker = ftracker;
 
-    DCE2_SmbSetFileName(ftracker->file_name, ftracker->file_name_len);
+    DCE2_SmbSetFileName(ftracker->file_name);
 
     if (ftracker->is_ipc)
     {
@@ -7067,7 +7057,7 @@ static inline DCE2_Ret DCE2_SmbProcessResponseData(DCE2_SmbSsnData *ssd,
     DEBUG_WRAP(DCE2_DebugMsg(DCE2_DEBUG__SMB,
                 "Processing response data with Fid: 0x%04X ~~~~~~~~~~~~~~~~\n", ftracker->fid_v1));
 
-    DCE2_SmbSetFileName(ftracker->file_name, ftracker->file_name_len);
+    DCE2_SmbSetFileName(ftracker->file_name);
 
     if (ftracker->is_ipc)
     {
@@ -7838,7 +7828,7 @@ static inline DCE2_Ret DCE2_SmbInitFileTracker(DCE2_SmbSsnData *ssd,
     ftracker->is_ipc = is_ipc;
     ftracker->is_smb2 = false;
     ftracker->file_name = NULL;
-    ftracker->file_name_len = 0;
+    ftracker->file_name_size = 0;
     if (is_ipc)
     {
         DCE2_CoTracker *co_tracker = DCE2_Alloc(sizeof(DCE2_CoTracker), DCE2_MEM_TYPE__SMB_FID);
@@ -8031,6 +8021,22 @@ static inline DCE2_SmbFileTracker * DCE2_SmbGetTmpFileTracker(DCE2_SmbRequestTra
     if (!DCE2_QueueIsEmpty(rtracker->ft_queue))
         return (DCE2_SmbFileTracker *)DCE2_QueueLast(rtracker->ft_queue);
     return NULL;
+}
+
+/********************************************************************
+ * Function:
+ *
+ * Purpose:
+ *
+ * Arguments:
+ *
+ * Returns: None
+ *
+ ********************************************************************/
+static inline void DCE2_SmbEmptyTmpFileTrackerQueue(DCE2_SmbRequestTracker *rtracker)
+{
+    if (!DCE2_QueueIsEmpty(rtracker->ft_queue))
+        DCE2_QueueEmpty(rtracker->ft_queue);
 }
 
 /********************************************************************
@@ -8246,12 +8252,12 @@ static DCE2_SmbFileTracker * DCE2_SmbFindFileTracker(DCE2_SmbSsnData *ssd,
  * Returns:
  *
  ********************************************************************/
-static DCE2_Ret DCE2_SmbRemoveFileTracker(DCE2_SmbSsnData *ssd, DCE2_SmbFileTracker *ftracker)
+static void DCE2_SmbRemoveFileTracker(DCE2_SmbSsnData *ssd, DCE2_SmbFileTracker *ftracker)
 {
     PROFILE_VARS;
 
     if (ftracker == NULL)
-        return DCE2_RET__ERROR;
+        return;
 
     PREPROC_PROFILE_START(dce2_pstat_smb_fid);
 
@@ -8259,19 +8265,7 @@ static DCE2_Ret DCE2_SmbRemoveFileTracker(DCE2_SmbSsnData *ssd, DCE2_SmbFileTrac
                 "Removing file tracker with Fid: 0x%04X\n", ftracker->fid_v1));
 
     if (ssd->fapi_ftracker == ftracker)
-    {
-       /* If the finish API returns pending set , we return from here 
-        * with not inspected and do not remove the file & request 
-        * trackers for upcoming retry packet.
-        */
-
-        DCE2_SmbRetransmitPending flag = DCE2_SmbFinishFileAPI(ssd);
-        if (flag == DCE2_SMB_RETRANSMIT_PENDING__SET) 
-        { 
-            PREPROC_PROFILE_END(dce2_pstat_smb_fid);
-            return DCE2_RET__NOT_INSPECTED;
-        }
-     }
+        DCE2_SmbFinishFileAPI(ssd);
 
 #ifdef ACTIVE_RESPONSE
     if (ssd->fb_ftracker == ftracker)
@@ -8286,7 +8280,6 @@ static DCE2_Ret DCE2_SmbRemoveFileTracker(DCE2_SmbSsnData *ssd, DCE2_SmbFileTrac
     DCE2_SmbRemoveFileTrackerFromRequestTrackers(ssd, ftracker);
 
     PREPROC_PROFILE_END(dce2_pstat_smb_fid);
-    return DCE2_RET__SUCCESS;
 }
 
 /********************************************************************
@@ -8311,9 +8304,12 @@ static inline void DCE2_SmbCleanFileTracker(DCE2_SmbFileTracker *ftracker)
     ftracker->fid_v1 = DCE2_SENTINEL;
     if (ftracker->file_name != NULL)
     {
-        DCE2_Free((void *)ftracker->file_name, ftracker->file_name_len, DCE2_MEM_TYPE__SMB_SSN);
+        if (!ftracker->is_smb2)
+            DCE2_Free((void *)ftracker->file_name, strlen(ftracker->file_name)+1, DCE2_MEM_TYPE__SMB_SSN);
+        else
+            DCE2_Free((void *)ftracker->file_name, ftracker->file_name_size, DCE2_MEM_TYPE__SMB_SSN);
         ftracker->file_name = NULL;
-        ftracker->file_name_len = 0;
+        ftracker->file_name_size = 0;
     }
 
     if (ftracker->is_ipc)
@@ -8438,7 +8434,7 @@ static inline void DCE2_SmbCleanRequestTracker(DCE2_SmbRequestTracker *rtracker)
 
     if (rtracker->file_name != NULL)
     {
-        DCE2_Free((void *)rtracker->file_name, rtracker->file_name_len, DCE2_MEM_TYPE__SMB_SSN);
+        DCE2_Free((void *)rtracker->file_name, strlen(rtracker->file_name)+1, DCE2_MEM_TYPE__SMB_SSN);
         rtracker->file_name = NULL;
     }
 
@@ -9487,7 +9483,7 @@ void DCE2_SmbInitDeletePdu(void)
     SmbNtHdr *smb_hdr = (SmbNtHdr *)((uint8_t *)nb_hdr + sizeof(*nb_hdr));
     SmbDeleteReq *del_req = (SmbDeleteReq *)((uint8_t *)smb_hdr + sizeof(*smb_hdr));
     uint8_t *del_req_fmt = (uint8_t *)del_req + sizeof(*del_req);
-    uint16_t smb_flg2 = 0xc843;
+    uint16_t smb_flg2 = 0x4001;
     uint16_t search_attrs = 0x0006;
 
     memset(dce2_smb_delete_pdu, 0, sizeof(dce2_smb_delete_pdu));
@@ -9518,18 +9514,16 @@ static void DCE2_SmbInjectDeletePdu(DCE2_SmbSsnData *ssd, DCE2_SmbFileTracker *f
     SmbDeleteReq *del_req = (SmbDeleteReq *)((uint8_t *)smb_hdr + sizeof(*smb_hdr));
     char *del_filename = (char *)((uint8_t *)del_req + sizeof(*del_req) + 1);
     uint32_t len;
-    uint16_t file_name_len = ftracker->file_name_len;
+    uint16_t file_name_len = strlen(ftracker->file_name) + 1;
 
     nb_hdr->length = htons(sizeof(*smb_hdr) + sizeof(*del_req) + 1 + file_name_len);
     len = ntohs(nb_hdr->length) + sizeof(*nb_hdr);
     smb_hdr->smb_tid = SmbHtons(&ftracker->tid_v1);
     smb_hdr->smb_uid = SmbHtons(&ftracker->uid_v1);
     del_req->smb_bcc = 1 + file_name_len;
-    if (SmbUnicode(smb_hdr)) 
-        memcpy(del_filename, ftracker->file_name + UTF_16_LE_BOM_LEN, file_name_len - UTF_16_LE_BOM_LEN);
-    else
-        memcpy(del_filename, ftracker->file_name, file_name_len);
-   _dpd.activeInjectData((void *)ssd->sd.wire_pkt, 0, (uint8_t *)nb_hdr, len);
+    memcpy(del_filename, ftracker->file_name, file_name_len);
+
+    _dpd.activeInjectData((void *)ssd->sd.wire_pkt, 0, (uint8_t *)nb_hdr, len);
 }
 
 static void DCE2_SmbFinishFileBlockVerdict(DCE2_SmbSsnData *ssd)
@@ -9576,7 +9570,7 @@ static File_Verdict DCE2_SmbGetFileVerdict(void *p, void *ssnptr)
 }
 #endif
 
-static inline DCE2_SmbRetransmitPending DCE2_SmbFinishFileAPI(DCE2_SmbSsnData *ssd)
+static inline void DCE2_SmbFinishFileAPI(DCE2_SmbSsnData *ssd)
 {
     void *ssnptr = ssd->sd.wire_pkt->stream_session;
     void *p = (void *)ssd->sd.wire_pkt;
@@ -9585,37 +9579,11 @@ static inline DCE2_SmbRetransmitPending DCE2_SmbFinishFileAPI(DCE2_SmbSsnData *s
     PROFILE_VARS;
 
     if (ftracker == NULL)
-        return DCE2_SMB_RETRANSMIT_PENDING__UNSET;
+        return;
 
     PREPROC_PROFILE_START(dce2_pstat_smb_file);
 
     upload = _dpd.fileAPI->get_file_direction(ssnptr);
-
-    /*This is a case of retrasmitted packet in upload sceanrio with Pending verdict*/
-    if ((ssd->smbretransmit))
-    {
-         ssd->smbretransmit = false;
-         _dpd.fileAPI->file_signature_lookup(p, true);
-         File_Verdict verdict = _dpd.fileAPI->get_file_verdict(ssnptr);
-         if ((verdict == FILE_VERDICT_BLOCK) || (verdict == FILE_VERDICT_REJECT))
-         {
-             ssd->fb_ftracker = ftracker;
-             ssd->fapi_ftracker = NULL;
-             PREPROC_PROFILE_END(dce2_pstat_smb_file);
-             return DCE2_SMB_RETRANSMIT_PENDING__UNSET;
-         }
-         else if (verdict == FILE_VERDICT_PENDING)
-         {
-             PREPROC_PROFILE_END(dce2_pstat_smb_file_api);
-             return DCE2_SMB_RETRANSMIT_PENDING__SET;
-         }
-         else /*if we get some other verdict , clean up*/
-         { 
-             ssd->fapi_ftracker = NULL;
-             PREPROC_PROFILE_END(dce2_pstat_smb_file);
-             return DCE2_SMB_RETRANSMIT_PENDING__UNSET;
-         }
-    }
 
     if (_dpd.fileAPI->get_file_processed_size(ssnptr) != 0)
     {
@@ -9624,12 +9592,12 @@ static inline DCE2_SmbRetransmitPending DCE2_SmbFinishFileAPI(DCE2_SmbSsnData *s
         if ((ftracker->ff_file_size == 0)
                 && (ftracker->ff_bytes_processed != 0))
         {
-            DCE2_SmbSetFileName(ftracker->file_name, ftracker->file_name_len);
+            DCE2_SmbSetFileName(ftracker->file_name);
 
             PREPROC_PROFILE_START(dce2_pstat_smb_file_api);
 
 #ifdef ACTIVE_RESPONSE
-            if (_dpd.fileAPI->file_process(p, NULL, 0, SNORT_FILE_END, upload, upload, false))
+            if (_dpd.fileAPI->file_process(p, NULL, 0, SNORT_FILE_END, upload, upload))
             {
                 if (upload)
                 {
@@ -9638,17 +9606,10 @@ static inline DCE2_SmbRetransmitPending DCE2_SmbFinishFileAPI(DCE2_SmbSsnData *s
 
                     if ((verdict == FILE_VERDICT_BLOCK) || (verdict == FILE_VERDICT_REJECT))
                         ssd->fb_ftracker = ftracker;
-
-                    else if ((verdict == FILE_VERDICT_PENDING) && (smb_upload_ret_cb_id != 0))
-                    {
-                        _dpd.streamAPI->set_event_handler(ssnptr, smb_upload_ret_cb_id, SE_REXMIT);
-                        PREPROC_PROFILE_END(dce2_pstat_smb_file_api);
-                        return DCE2_SMB_RETRANSMIT_PENDING__SET;
-                    }
                 }
             }
 #else
-            (void)_dpd.fileAPI->file_process(p, NULL, 0, SNORT_FILE_END, upload, false, false);
+            (void)_dpd.fileAPI->file_process(p, NULL, 0, SNORT_FILE_END, upload, false);
 #endif
 
             PREPROC_PROFILE_END(dce2_pstat_smb_file_api);
@@ -9660,7 +9621,6 @@ static inline DCE2_SmbRetransmitPending DCE2_SmbFinishFileAPI(DCE2_SmbSsnData *s
     ssd->fapi_ftracker = NULL;
 
     PREPROC_PROFILE_END(dce2_pstat_smb_file);
-    return DCE2_SMB_RETRANSMIT_PENDING__UNSET;
 }
 
 static inline bool DCE2_SmbIsVerdictSuspend(bool upload, FilePosition position)
@@ -9726,10 +9686,11 @@ static DCE2_Ret DCE2_SmbFileAPIProcess(DCE2_SmbSsnData *ssd,
 
     if (!_dpd.fileAPI->file_process((void *)ssd->sd.wire_pkt,
                 (uint8_t *)data_ptr, (int)data_len, position, upload,
-                DCE2_SmbIsVerdictSuspend(upload, position), false))
+                DCE2_SmbIsVerdictSuspend(upload, position)))
     {
         DEBUG_WRAP(DCE2_DebugMsg(DCE2_DEBUG__SMB, "File API returned FAILURE "
-                    "for (0x%02X) %s\n", ftracker->fid_v1, upload ? "UPLOAD" : "DOWNLOAD"));
+                    "for \"%s\" (0x%02X) %s\n", smb_file_name,
+                    ftracker->fid_v1, upload ? "UPLOAD" : "DOWNLOAD"));
 
         PREPROC_PROFILE_END(dce2_pstat_smb_file_api);
 
@@ -9741,13 +9702,14 @@ static DCE2_Ret DCE2_SmbFileAPIProcess(DCE2_SmbSsnData *ssd,
         PREPROC_PROFILE_END(dce2_pstat_smb_file_api);
 
         DEBUG_WRAP(DCE2_DebugMsg(DCE2_DEBUG__SMB, "File API returned SUCCESS "
-                    "for (0x%02X) %s\n", ftracker->fid_v1, upload ? "UPLOAD" : "DOWNLOAD"));
+                    "for \"%s\" (0x%02X) %s\n", smb_file_name,
+                    ftracker->fid_v1, upload ? "UPLOAD" : "DOWNLOAD"));
 
         if (((position == SNORT_FILE_START) || (position == SNORT_FILE_FULL))
-                && (smb_file_name_len != 0))
+                && (strlen(smb_file_name) != 0))
         {
             _dpd.fileAPI->set_file_name((void *)ssd->sd.wire_pkt->stream_session,
-                    (uint8_t *)smb_file_name, smb_file_name_len, false);
+                    (uint8_t *)smb_file_name, strlen(smb_file_name), false);
         }
 
         if ((position == SNORT_FILE_FULL) || (position == SNORT_FILE_END))
@@ -10093,98 +10055,92 @@ static void DCE2_SmbProcessFileData(DCE2_SmbSsnData *ssd,
  *  array for logging the file name for events.
  *
  * Arguments:
- *  uint8_t*  - NULL terminated file name(ASCII or UTF-16LE)
- *              file_name returned by DCE2_SmbGetString can be max 2*DCE2_SMB_MAX_PATH_LEN + UTF_16_LE_BOM_LEN + 2 bytes
- *              No need to check for overflow
- *  uint16_t  - file_name_len which includes NULL terminated bytes
+ *  char *  - NULL terminated file name
  *
  * Returns: None
  *
  ********************************************************************/
-static inline void DCE2_SmbSetFileName(uint8_t* file_name, uint16_t file_name_len)
+static inline void DCE2_SmbSetFileName(char *file_name)
 {
+    uint16_t size;
+    size_t file_name_len;
+
+    DEBUG_WRAP(DCE2_DebugMsg(DCE2_DEBUG__SMB, "File name: %s\n",
+                (file_name == NULL) ? "NULL" : file_name));
+
     if (file_name == NULL)
         return;
 
-    smb_file_name_len = file_name_len;
-    memcpy(smb_file_name, file_name, file_name_len);
+    file_name_len = strlen(file_name);
+
+    if (file_name_len+1 > sizeof(smb_file_name))
+        size = sizeof(smb_file_name)-1;
+    else
+        size = file_name_len;
+
+    memcpy(smb_file_name, file_name, size);
+    smb_file_name[size] = '\0';
 }
 
 /********************************************************************
  * Function: DCE2_SmbGetString()
  *
  * Purpose:
- *  Parses data passed in and returns a byte stream.
- *  unicode stream is prepended with BOM
+ *  Parses data passed in and returns an ASCII string.  True
+ *  unicode characters are replaced with a '.'
  *
  * Arguments:
  *  const uint8_t *  - pointer to data
  *  uint32_t         - data length
  *  bool             - true if the data is unicode (UTF-16LE)
- *  uint16_t *       - Returns the length of the output buffer including the NULL terminated bytes
+ *  bool             - true if the function should only return the
+ *                     file name instead of the entire path
  *
  * Returns:
- *  uint8_t *        - NULL terminated byte stream (ASCII or UTF-16LE with BOM)
+ *  char *  - NULL terminated ASCII string
  *
  ********************************************************************/
-static uint8_t* DCE2_SmbGetString(const uint8_t *data,
-        uint32_t data_len, bool unicode, uint16_t *file_name_len)
+static char * DCE2_SmbGetString(const uint8_t *data,
+        uint32_t data_len, bool unicode, bool get_file)
 {
-    uint8_t *fname = NULL;
-    uint32_t i = 0;
+    char *str;
+    uint32_t i, j, k = unicode ? data_len - 1 : data_len;
     uint8_t inc = unicode ? 2 : 1;
-    *file_name_len = 0;
 
     if (data_len < inc)
         return NULL;
-    for (i = 0; i < data_len; i += inc)
+
+    // Move forward.  Don't know if the end of data is actually
+    // the end of the string.
+    for (i = 0, j = 0; i < k; i += inc)
     {
         uint16_t uchar = unicode ? SmbNtohs((uint16_t *)(data + i)) : data[i];
+
         if (uchar == 0)
             break;
+        else if (get_file && ((uchar == 0x002F) || (uchar == 0x005C)))  // slash and back-slash
+            j = i + inc;
     }
-    if(i > inc*DCE2_SMB_MAX_PATH_LEN)
+
+    // Only got a NULL byte or nothing after slash/back-slash or too big.
+    if ((i == 0) || (j == i)
+            || (get_file && (i > DCE2_SMB_MAX_COMP_LEN))
+            || (i > DCE2_SMB_MAX_PATH_LEN))
         return NULL;
 
-    if(unicode)
-    {
-        fname = (uint8_t *)DCE2_Alloc(i + UTF_16_LE_BOM_LEN + 2, DCE2_MEM_TYPE__SMB_SSN);
-        if (fname == NULL)
-            return NULL;
+    str = (char *)DCE2_Alloc(((i-j)>>(inc-1))+1, DCE2_MEM_TYPE__SMB_SSN);
+    if (str == NULL)
+        return NULL;
 
-        memcpy(fname, UTF_16_LE_BOM, UTF_16_LE_BOM_LEN);//Prepend with BOM
-        memcpy(fname + UTF_16_LE_BOM_LEN, data, i);
-        *file_name_len = i + UTF_16_LE_BOM_LEN + 2;
-    }
-    else
+    for (k = 0; j < i; j += inc, k++)
     {
-        fname = (uint8_t *)DCE2_Alloc(i + 1, DCE2_MEM_TYPE__SMB_SSN);
-        if (fname == NULL)
-            return NULL;
-        memcpy(fname, data, i);
-        *file_name_len = i + 1;
+        if (isprint((int)data[j]))
+            str[k] = (char)data[j];
+        else
+            str[k] = '.';
     }
 
-    return fname;
-}
+    str[k] = 0;
 
-static inline void DCE2_Update_Ftracker_from_ReqTracker(DCE2_SmbFileTracker *ftracker, DCE2_SmbRequestTracker *cur_rtracker)
-{
-    ftracker->file_name = cur_rtracker->file_name;
-    ftracker->file_name_len = cur_rtracker->file_name_len;
-    cur_rtracker->file_name = NULL;
-    cur_rtracker->file_name_len = 0;
-    return;
-}
-
-void DCE2_Process_Retransmitted(SFSnortPacket *p)
-{
-     DCE2_SsnData *sd = (DCE2_SsnData *)DCE2_SsnGetAppData(p);
-     if (sd != NULL) 
-     {
-         sd->wire_pkt = p;
-         DCE2_SmbSsnData *ssd = (DCE2_SmbSsnData *)sd;
-         ssd->smbretransmit = true;
-         DCE2_SmbRemoveFileTracker(ssd, ssd->cur_rtracker->ftracker);
-     }
+    return str;
 }

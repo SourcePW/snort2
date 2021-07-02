@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
- ** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ ** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  ** Copyright (C) 2010-2013 Sourcefire, Inc.
  **
  ** This program is free software; you can redistribute it and/or modify
@@ -108,9 +108,9 @@ void SetupNormalizer (void)
 static NormalizerContext* Init_GetContext (struct _SnortConfig *sc)
 {
     NormalizerContext* pc = NULL;
-    tSfPolicyId policy_id = getParserPolicy(sc);
+    tSfPolicyId policy_id = getParserPolicy(NULL);
 
-    if ( ScNapPassiveModeNewConf(sc) )
+    if ( ScNapPassiveMode() )
         return NULL;
 
     if ( !base_set )
@@ -128,14 +128,11 @@ static NormalizerContext* Init_GetContext (struct _SnortConfig *sc)
     {
         pc = (NormalizerContext* )SnortAlloc(sizeof(NormalizerContext));
         sfPolicyUserDataSetCurrent(base_set, pc);
-        if( pc->regFunc != reload)
-        {
-            AddFuncToPreprocList( sc, Preproc_Execute, PP_NORMALIZE_PRIORITY,  PP_NORMALIZE, PROTO_BITS);
-            pc->regFunc = init;
-        }
+
+        AddFuncToPreprocList( sc, Preproc_Execute, PP_NORMALIZE_PRIORITY,  PP_NORMALIZE, PROTO_BITS);
         session_api->enable_preproc_all_ports( sc, PP_NORMALIZE, PROTO_BITS );          
     }
-    pc->normMode = ScNapInlineTestModeNewConf(sc) ? NORM_MODE_WOULDA : NORM_MODE_ON;
+    pc->normMode = ScNapInlineTestMode() ? NORM_MODE_WOULDA : NORM_MODE_ON;
 
     return pc;
 }
@@ -346,6 +343,10 @@ static void Parse_TCP (NormalizerContext* pc, char* args)
             else if ( !strcasecmp(toks[i], "ips") )
             {
                 Norm_Enable(pc, NORM_TCP_IPS);
+            }
+            else if ( !strcasecmp(toks[i], "ftp") )
+            {
+                Norm_Enable(pc, NORM_FTP_DATA);
             }
             else if ( !strcasecmp(toks[i], "trim_syn") )
             {
@@ -761,7 +762,7 @@ static NormalizerContext* Reload_GetContext (struct _SnortConfig *sc, void **new
     NormalizerContext* pc = NULL;
     tSfPolicyId policy_id = getParserPolicy(sc);
 
-    if ( ScNapPassiveModeNewConf(sc) )
+    if ( ScNapPassiveMode() )
         return NULL;
 
     if (!(swap_set = (tSfPolicyUserContextId)*new_config))
@@ -787,12 +788,8 @@ static NormalizerContext* Reload_GetContext (struct _SnortConfig *sc, void **new
         pc = (NormalizerContext* )SnortAlloc(sizeof(NormalizerContext));
         sfPolicyUserDataSetCurrent(swap_set, pc);
 
-        if( pc->regFunc != init)
-        {
-            AddFuncToPreprocList(
-                sc, Preproc_Execute, PP_NORMALIZE_PRIORITY, PP_NORMALIZE, PROTO_BITS);
-            pc->regFunc = reload;
-        }
+        AddFuncToPreprocList(
+            sc, Preproc_Execute, PP_NORMALIZE_PRIORITY, PP_NORMALIZE, PROTO_BITS);
         session_api->enable_preproc_all_ports( sc, PP_NORMALIZE, PROTO_BITS );          
   
     }

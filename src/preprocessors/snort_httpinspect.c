@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2003-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -98,7 +98,6 @@
 #include "sf_email_attach_decode.h"
 #include "file_decomp.h"
 #include "hi_eo_log.h"
-#include "memory_stats.h"
 
 #ifdef DUMP_BUFFER
 #include "hi_buffer_dump.h"
@@ -228,8 +227,6 @@ HISearchInfo hi_search_info;
 #define MAX_SPACES    "max_spaces"
 #define INSPECT_SWF       "decompress_swf"
 #define INSPECT_PDF       "decompress_pdf"
-#define NORMALIZE_NULLS   "normalize_random_nulls_in_text"
-#define FAST_BLOCKING     "fast_blocking"
 
 #define DECOMPRESS_DEFLATE "deflate"
 #define DECOMPRESS_LZMA    "lzma"
@@ -293,14 +290,6 @@ typedef enum {
     CONFIG_MAX_JS_WS
 } SpaceType;
 
-typedef enum
-{
-   CD_CHARSET_UNKNOWN,
-   CD_CHARSET_UTF8,
-   CD_CHARSET_ISO_9959_1,
-   CD_CHARSET_MIME
-}CD_Charset;
-
 static char** getHttpXffPrecedence(void* ssn, uint32_t flags, int* nFields);
 
 /*
@@ -338,8 +327,7 @@ static int ProcessGlobalAlert(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
 static int ProcessIISUnicodeMap(uint8_t **iis_unicode_map,
                                 char **iis_unicode_map_filename,
                                 int *iis_unicode_map_codepage,
-                                char *ErrorString, int ErrStrLen,
-                                char **saveptr)
+                                char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int  iRet;
@@ -347,7 +335,7 @@ static int ProcessIISUnicodeMap(uint8_t **iis_unicode_map,
     char *pcEnd;
     int  iCodeMap;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -425,7 +413,7 @@ static int ProcessIISUnicodeMap(uint8_t **iis_unicode_map,
         return -1;
     }
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -483,14 +471,13 @@ static int ProcessIISUnicodeMap(uint8_t **iis_unicode_map,
 }
 
 static int ProcessOversizeDir(HTTPINSPECT_CONF *ServerConf,
-                              char *ErrorString, int ErrStrLen,
-                              char **saveptr)
+                              char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     char *pcEnd;
     int  iDirLen;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -517,12 +504,12 @@ static int ProcessOversizeDir(HTTPINSPECT_CONF *ServerConf,
 }
 
 static int ProcessHttpMemcap(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
-                char *ErrorString, int ErrStrLen, char **saveptr)
+                char *ErrorString, int ErrStrLen)
 {
     char *pcToken, *pcEnd;
     int memcap;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -556,12 +543,12 @@ static int ProcessHttpMemcap(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
 
 
 static int ProcessMaxGzipMem(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
-        char *ErrorString, int ErrStrLen, char **saveptr)
+        char *ErrorString, int ErrStrLen)
 {
     char *pcToken, *pcEnd;
     int max_gzip_mem;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -590,13 +577,13 @@ static int ProcessMaxGzipMem(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
 }
 
 static int ProcessCompressDepth(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
-                            char *ErrorString, int ErrStrLen, char **saveptr)
+                            char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int  compress_depth;
     char *pcEnd;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -629,13 +616,13 @@ static int ProcessCompressDepth(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
 }
 
 static int ProcessDecompressDepth(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
-                            char *ErrorString, int ErrStrLen, char **saveptr)
+                            char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int  decompress_depth;
     char *pcEnd;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -691,8 +678,7 @@ static int ProcessDecompressDepth(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
 **
 **  @param GlobalConf  pointer to the global configuration
 **  @param ErrorString error string buffer
-**  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
+**  @param ErrStrLen   the lenght of the error string buffer
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -702,13 +688,13 @@ static int ProcessDecompressDepth(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
 **  @retval  1 generic non-fatal error
 */
 int ProcessGlobalConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
-                      char *ErrorString, int ErrStrLen, char **saveptr)
+                      char *ErrorString, int ErrStrLen)
 {
     int  iRet;
     char *pcToken;
     int  iTokens = 0;
 
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         /*
         **  Show that we at least got one token
@@ -718,7 +704,7 @@ int ProcessGlobalConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
         if(!strcmp(IIS_UNICODE_MAP, pcToken))
         {
             iRet = ProcessIISUnicodeMap(&GlobalConf->iis_unicode_map, &GlobalConf->iis_unicode_map_filename,
-                                        &GlobalConf->iis_unicode_codepage, ErrorString, ErrStrLen, saveptr);
+                                        &GlobalConf->iis_unicode_codepage, ErrorString,ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -738,19 +724,19 @@ int ProcessGlobalConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
         }
         else if (!strcmp(MAX_GZIP_MEM, pcToken))
         {
-            iRet = ProcessMaxGzipMem(GlobalConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessMaxGzipMem(GlobalConf, ErrorString, ErrStrLen);
             if(iRet)
                 return iRet;
         }
         else if (!strcmp(COMPRESS_DEPTH, pcToken))
         {
-            iRet = ProcessCompressDepth(GlobalConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessCompressDepth(GlobalConf, ErrorString, ErrStrLen);
             if (iRet)
                 return iRet;
         }
         else if (!strcmp(DECOMPRESS_DEPTH, pcToken))
         {
-            iRet = ProcessDecompressDepth(GlobalConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessDecompressDepth(GlobalConf, ErrorString, ErrStrLen);
             if(iRet)
                 return iRet;
         }
@@ -759,22 +745,13 @@ int ProcessGlobalConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
             GlobalConf->disabled = 1;
             return 0;
         }
-        else if (!strcmp(NORMALIZE_NULLS, pcToken))
-        {
-            GlobalConf->normalize_nulls = TRUE;
-        }
-        else if (!strcmp(FAST_BLOCKING, pcToken))
-        {
-            GlobalConf->fast_blocking = TRUE;
-        }
-
         else if (!strcmp(HTTP_MEMCAP, pcToken))
         {
-            iRet = ProcessHttpMemcap(GlobalConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessHttpMemcap(GlobalConf, ErrorString, ErrStrLen);
             if(iRet)
                 return iRet;
         }
-        else if (!file_api->parse_mime_decode_args(&(GlobalConf->decode_conf), pcToken, "HTTP", saveptr))
+        else if (!file_api->parse_mime_decode_args(&(GlobalConf->decode_conf),pcToken, "HTTP"))
         {
             continue;
         }
@@ -858,7 +835,6 @@ static inline int _ProcessProfileErr(int iRet, char* ErrorString,
 **  @param ServerConf  pointer to the server configuration
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -869,13 +845,12 @@ static inline int _ProcessProfileErr(int iRet, char* ErrorString,
 */
 static int ProcessProfile(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
                           HTTPINSPECT_CONF *ServerConf,
-                          char *ErrorString, int ErrStrLen,
-                          char **saveptr)
+                          char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int  iRet;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -957,7 +932,6 @@ static int ProcessProfile(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
 **  @param ServerConf  pointer to the server configuration
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -967,14 +941,14 @@ static int ProcessProfile(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessPorts(HTTPINSPECT_CONF *ServerConf,
-                        char *ErrorString, int ErrStrLen, char **saveptr)
+                        char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     char *pcEnd;
     int  iPort;
     int  iEndPorts = 0;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(!pcToken)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -994,7 +968,7 @@ static int ProcessPorts(HTTPINSPECT_CONF *ServerConf,
 
     memset(ServerConf->ports, 0, MAXPORTS_STORAGE);
 
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if(!strcmp(END_PORT_LIST, pcToken))
         {
@@ -1054,7 +1028,6 @@ static int ProcessPorts(HTTPINSPECT_CONF *ServerConf,
 **  @param ServerOrClient which flowdepth is being set
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -1064,13 +1037,13 @@ static int ProcessPorts(HTTPINSPECT_CONF *ServerConf,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessFlowDepth(HTTPINSPECT_CONF *ServerConf, int ServerOrClient,
-                            char *ErrorString, int ErrStrLen, char **saveptr, char *pToken, int maxDepth)
+                            char *ErrorString, int ErrStrLen, char *pToken, int maxDepth)
 {
     char *pcToken;
     int  iFlowDepth;
     char *pcEnd;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -1119,7 +1092,6 @@ static int ProcessFlowDepth(HTTPINSPECT_CONF *ServerConf, int ServerOrClient,
 **  @param ServerConf  pointer to the server configuration
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -1129,13 +1101,13 @@ static int ProcessFlowDepth(HTTPINSPECT_CONF *ServerConf, int ServerOrClient,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessPostDepth(HTTPINSPECT_CONF *ServerConf,
-                            char *ErrorString, int ErrStrLen, char **saveptr)
+                            char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int  post_depth;
     char *pcEnd;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -1179,7 +1151,6 @@ static int ProcessPostDepth(HTTPINSPECT_CONF *ServerConf,
 **  @param ServerConf  pointer to the server configuration
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -1189,13 +1160,13 @@ static int ProcessPostDepth(HTTPINSPECT_CONF *ServerConf,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessChunkLength(HTTPINSPECT_CONF *ServerConf,
-                              char *ErrorString, int ErrStrLen, char **saveptr)
+                              char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int  iChunkLength;
     char *pcEnd;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -1228,7 +1199,6 @@ static int ProcessChunkLength(HTTPINSPECT_CONF *ServerConf,
 **  @param ServerConf  pointer to the server configuration
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -1238,14 +1208,14 @@ static int ProcessChunkLength(HTTPINSPECT_CONF *ServerConf,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessSmallChunkLength(HTTPINSPECT_CONF *ServerConf,
-                                   char *ErrorString, int ErrStrLen, char **saveptr)
+                                   char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     char *pcEnd;
     int num_toks = 0;
     bool got_param_end = 0;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if (!pcToken)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -1263,7 +1233,7 @@ static int ProcessSmallChunkLength(HTTPINSPECT_CONF *ServerConf,
         return -1;
     }
 
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if (!strcmp(END_PORT_LIST, pcToken))
         {
@@ -1342,7 +1312,6 @@ static int ProcessSmallChunkLength(HTTPINSPECT_CONF *ServerConf,
 **  @param ServerConf  pointer to the server configuration
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -1352,13 +1321,13 @@ static int ProcessSmallChunkLength(HTTPINSPECT_CONF *ServerConf,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessMaxHeaders(HTTPINSPECT_CONF *ServerConf,
-                              char *ErrorString, int ErrStrLen, char **saveptr)
+                              char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int  length;
     char *pcEnd;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -1408,7 +1377,6 @@ static int ProcessMaxHeaders(HTTPINSPECT_CONF *ServerConf,
 **  @param ServerConf  pointer to the server configuration
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -1418,13 +1386,13 @@ static int ProcessMaxHeaders(HTTPINSPECT_CONF *ServerConf,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessMaxHdrLen(HTTPINSPECT_CONF *ServerConf,
-                              char *ErrorString, int ErrStrLen, char **saveptr)
+                              char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int  length;
     char *pcEnd;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -1478,7 +1446,6 @@ static int ProcessMaxHdrLen(HTTPINSPECT_CONF *ServerConf,
 **  @param Option   character pointer to the option being configured
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -1488,11 +1455,11 @@ static int ProcessMaxHdrLen(HTTPINSPECT_CONF *ServerConf,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessConfOpt(HTTPINSPECT_CONF_OPT *ConfOpt, char *Option,
-                          char *ErrorString, int ErrStrLen, char **saveptr)
+                          char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -1539,7 +1506,6 @@ static int ProcessConfOpt(HTTPINSPECT_CONF_OPT *ConfOpt, char *Option,
 **  @param ConfOpt  pointer to the configuration option
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -1549,14 +1515,14 @@ static int ProcessConfOpt(HTTPINSPECT_CONF_OPT *ConfOpt, char *Option,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessNonRfcChar(HTTPINSPECT_CONF *ServerConf,
-                             char *ErrorString, int ErrStrLen, char **saveptr)
+                             char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     char *pcEnd;
     int  iChar;
     int  iEndChar = 0;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(!pcToken)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -1574,7 +1540,7 @@ static int ProcessNonRfcChar(HTTPINSPECT_CONF *ServerConf,
         return -1;
     }
 
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if(!strcmp(END_PORT_LIST, pcToken))
         {
@@ -1628,7 +1594,6 @@ static int ProcessNonRfcChar(HTTPINSPECT_CONF *ServerConf,
 **  @param ServerConf  pointer to the server configuration structure
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -1638,14 +1603,14 @@ static int ProcessNonRfcChar(HTTPINSPECT_CONF *ServerConf,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessWhitespaceChars(HTTPINSPECT_CONF *ServerConf,
-                             char *ErrorString, int ErrStrLen, char **saveptr)
+                             char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     char *pcEnd;
     int  iChar;
     int  iEndChar = 0;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(!pcToken)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -1663,7 +1628,7 @@ static int ProcessWhitespaceChars(HTTPINSPECT_CONF *ServerConf,
         return -1;
     }
 
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if(!strcmp(END_PORT_LIST, pcToken))
         {
@@ -1874,25 +1839,25 @@ static int Add_XFF_Field( HTTPINSPECT_CONF *ServerConf, uint8_t *Prec_Array, uin
 }
 
 static int ProcessXFF_HeaderList(HTTPINSPECT_CONF *ServerConf,
-                      char *ErrorString, int ErrStrLen, char **saveptr)
+                      char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int Parse_State;
-    bool Keep_Parsing = false;
-    bool Have_XFF = false;
-    bool Have_TCI = false;
+    bool Keep_Parsing;
+    bool Have_XFF;
+    bool Have_TCI;
     uint8_t Prec_List[HTTP_MAX_XFF_FIELDS];
     unsigned char Count = 0;
     unsigned char Max_XFF = { (HTTP_MAX_XFF_FIELDS-HTTP_XFF_BUILTIN_NAMES) };
     uint8_t *Field_Name=NULL;
     unsigned int Precedence;
     int i;
-    uint8_t addXffFieldName = 0;
+     uint8_t addXffFieldName = 0;
 
     /* NOTE:  This procedure assumes that the ServerConf->xff_headers array
               contains all NULL's due to the structure allocation process. */
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(!pcToken)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -2016,7 +1981,7 @@ static int ProcessXFF_HeaderList(HTTPINSPECT_CONF *ServerConf,
             }
         }
     }
-    while( Keep_Parsing && ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL) );
+    while( Keep_Parsing && ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL) );
 
     if( Field_Name && !addXffFieldName )
     {
@@ -2082,7 +2047,7 @@ static char** getHttpXffFields(int* nFields)
 }
 
 static int ProcessHttpMethodList(HTTPINSPECT_CONF *ServerConf,
-                      char *ErrorString, int ErrStrLen, char **saveptr)
+                      char *ErrorString, int ErrStrLen)
 {
     HTTP_CMD_CONF *HTTPMethods = NULL;
     char *pcToken;
@@ -2091,7 +2056,7 @@ static int ProcessHttpMethodList(HTTPINSPECT_CONF *ServerConf,
     int  iRet;
 
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(!pcToken)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -2109,7 +2074,7 @@ static int ProcessHttpMethodList(HTTPINSPECT_CONF *ServerConf,
         return -1;
     }
 
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if(!strcmp(END_PORT_LIST, pcToken))
         {
@@ -2161,13 +2126,13 @@ static int ProcessHttpMethodList(HTTPINSPECT_CONF *ServerConf,
 }
 
 static int ProcessDecompressionTypeList(HTTPINSPECT_CONF *ServerConf,
-                      char *ConfigType, char *ErrorString, int ErrStrLen, char **saveptr)
+                      char *ConfigType, char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     char *cmd;
     int  iEndCmds = 0;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(!pcToken)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -2185,7 +2150,7 @@ static int ProcessDecompressionTypeList(HTTPINSPECT_CONF *ServerConf,
         return -1;
     }
 
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if(!strcmp(END_PORT_LIST, pcToken))
         {
@@ -2262,7 +2227,6 @@ static int ProcessDecompressionTypeList(HTTPINSPECT_CONF *ServerConf,
 **  @param ServerConf  pointer to the server configuration
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -2272,14 +2236,13 @@ static int ProcessDecompressionTypeList(HTTPINSPECT_CONF *ServerConf,
 **  @retval  1 generic non-fatal error
 */
 static int ProcessMaxSpaces(HTTPINSPECT_CONF *ServerConf,
-                              char *ErrorString, int ErrStrLen, char **saveptr,
-                              char *configOption, SpaceType type)
+                              char *ErrorString, int ErrStrLen, char *configOption, SpaceType type)
 {
     char *pcToken;
     int  num_spaces;
     char *pcEnd;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -2343,7 +2306,6 @@ static int ProcessMaxSpaces(HTTPINSPECT_CONF *ServerConf,
 **  @param ServerConf  pointer to the server configuration
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -2354,7 +2316,7 @@ static int ProcessMaxSpaces(HTTPINSPECT_CONF *ServerConf,
 */
 static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
                              HTTPINSPECT_CONF *ServerConf,
-                             char *ErrorString, int ErrStrLen, char **saveptr)
+                             char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int  iRet;
@@ -2365,7 +2327,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
     **  Check for profile keyword first, it's the only place in the
     **  configuration that is correct.
     */
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(pcToken == NULL)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -2376,13 +2338,13 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
 
     if(!strcmp(PROFILE_STRING, pcToken))
     {
-        iRet = ProcessProfile(GlobalConf, ServerConf, ErrorString, ErrStrLen, saveptr);
+        iRet = ProcessProfile(GlobalConf, ServerConf, ErrorString, ErrStrLen);
         if (iRet)
         {
             return iRet;
         }
 
-        pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+        pcToken = strtok(NULL, CONF_SEPARATORS);
         if(pcToken == NULL)
         {
             SnortSnprintf(ErrorString, ErrStrLen,
@@ -2395,7 +2357,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
         {
             if(!strcmp(PORTS, pcToken))
             {
-                iRet = ProcessPorts(ServerConf, ErrorString, ErrStrLen, saveptr);
+                iRet = ProcessPorts(ServerConf, ErrorString, ErrStrLen);
                 if (iRet)
                 {
                     return iRet;
@@ -2408,7 +2370,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
                 iRet = ProcessIISUnicodeMap(&ServerConf->iis_unicode_map,
                                             &ServerConf->iis_unicode_map_filename,
                                             &ServerConf->iis_unicode_codepage,
-                                            ErrorString,ErrStrLen, saveptr);
+                                            ErrorString,ErrStrLen);
                 if (iRet)
                 {
                     return -1;
@@ -2420,7 +2382,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
             }
             else if(!strcmp(FLOW_DEPTH, pcToken) || !strcmp(SERVER_FLOW_DEPTH, pcToken))
             {
-                iRet = ProcessFlowDepth(ServerConf, HI_SI_SERVER_MODE, ErrorString, ErrStrLen, saveptr, pcToken, MAX_SERVER_DEPTH);
+                iRet = ProcessFlowDepth(ServerConf, HI_SI_SERVER_MODE, ErrorString, ErrStrLen, pcToken, MAX_SERVER_DEPTH);
                 if (iRet)
                 {
                     return iRet;
@@ -2428,7 +2390,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
             }
             else if(!strcmp(CLIENT_FLOW_DEPTH, pcToken))
             {
-                iRet = ProcessFlowDepth(ServerConf, HI_SI_CLIENT_MODE, ErrorString, ErrStrLen, saveptr, pcToken, MAX_CLIENT_DEPTH);
+                iRet = ProcessFlowDepth(ServerConf, HI_SI_CLIENT_MODE, ErrorString, ErrStrLen, pcToken, MAX_CLIENT_DEPTH);
                 if (iRet)
                 {
                     return iRet;
@@ -2436,7 +2398,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
             }
             else if(!strcmp(POST_DEPTH, pcToken))
             {
-                iRet = ProcessPostDepth(ServerConf, ErrorString, ErrStrLen, saveptr);
+                iRet = ProcessPostDepth(ServerConf, ErrorString, ErrStrLen);
                 if (iRet)
                 {
                     return iRet;
@@ -2448,7 +2410,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
             }
             else if(!strcmp(OVERSIZE_DIR, pcToken))
             {
-                iRet = ProcessOversizeDir(ServerConf, ErrorString, ErrStrLen, saveptr);
+                iRet = ProcessOversizeDir(ServerConf, ErrorString, ErrStrLen);
                 if (iRet)
                 {
                     return iRet;
@@ -2489,7 +2451,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
                                 "Enable '%s' before setting '%s'", NORMALIZE_JS, MAX_JS_WS);
                     return -1;
                 }
-                iRet = ProcessMaxSpaces(ServerConf, ErrorString, ErrStrLen, saveptr, MAX_JS_WS, CONFIG_MAX_JS_WS);
+                iRet = ProcessMaxSpaces(ServerConf, ErrorString, ErrStrLen, MAX_JS_WS, CONFIG_MAX_JS_WS);
                 if (iRet)
                 {
                     return iRet;
@@ -2506,7 +2468,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
             }
             else if (!strcmp(HTTP_METHODS, pcToken))
             {
-                iRet = ProcessHttpMethodList(ServerConf, ErrorString, ErrStrLen, saveptr);
+                iRet = ProcessHttpMethodList(ServerConf, ErrorString, ErrStrLen);
                 if (iRet)
                 {
                     return iRet;
@@ -2553,7 +2515,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
                     return -1;
                 }
 
-                ProcessDecompressionTypeList(ServerConf,pcToken,ErrorString,ErrStrLen, saveptr);
+                ProcessDecompressionTypeList(ServerConf,pcToken,ErrorString,ErrStrLen);
             }
 #endif
 #ifdef FILE_DECOMP_PDF
@@ -2566,12 +2528,12 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
                     return -1;
                 }
 
-                ProcessDecompressionTypeList(ServerConf,pcToken,ErrorString,ErrStrLen, saveptr);
+                ProcessDecompressionTypeList(ServerConf,pcToken,ErrorString,ErrStrLen);
             }
 #endif
             else if(!strcmp(MAX_HDR_LENGTH, pcToken))
             {
-                iRet = ProcessMaxHdrLen(ServerConf, ErrorString, ErrStrLen, saveptr);
+                iRet = ProcessMaxHdrLen(ServerConf, ErrorString, ErrStrLen);
                 if (iRet)
                 {
                     return iRet;
@@ -2579,7 +2541,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
             }
             else if(!strcmp(MAX_HEADERS, pcToken))
             {
-                iRet = ProcessMaxHeaders(ServerConf, ErrorString, ErrStrLen, saveptr);
+                iRet = ProcessMaxHeaders(ServerConf, ErrorString, ErrStrLen);
                 if (iRet)
                 {
                     return iRet;
@@ -2587,7 +2549,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
             }
             else if(!strcmp(MAX_SPACES, pcToken))
             {
-                iRet = ProcessMaxSpaces(ServerConf, ErrorString, ErrStrLen, saveptr, MAX_SPACES, CONFIG_MAX_SPACES);
+                iRet = ProcessMaxSpaces(ServerConf, ErrorString, ErrStrLen, MAX_SPACES, CONFIG_MAX_SPACES);
                 if (iRet)
                 {
                     return iRet;
@@ -2606,7 +2568,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
                     return -1;
                 }
 
-                if( ((iRet = ProcessXFF_HeaderList(ServerConf, ErrorString, ErrStrLen, saveptr)) != 0)  )
+                if( ((iRet = ProcessXFF_HeaderList(ServerConf, ErrorString, ErrStrLen)) != 0)  )
                 {
                     return iRet;
                 }
@@ -2621,7 +2583,7 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
             }
             else if(!strcmp(SMALL_CHUNK_LENGTH, pcToken))
             {
-                iRet = ProcessSmallChunkLength(ServerConf,ErrorString,ErrStrLen, saveptr);
+                iRet = ProcessSmallChunkLength(ServerConf,ErrorString,ErrStrLen);
                 if (iRet)
                 {
                     return iRet;
@@ -2629,8 +2591,8 @@ static int ProcessServerConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf,
             }
             else if (!strcmp(LEGACY_MODE, pcToken))
             {
-                pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
-                if (pcToken == NULL)
+                pcToken = strtok(NULL, CONF_SEPARATORS);
+                if(pcToken ==  NULL)
                     break;
 
                 if(!strcmp(BOOL_YES, pcToken))
@@ -2676,7 +2638,7 @@ INSPECT_PDF,
                 return -1;
             }
 
-        }  while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL);
+        }  while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL);
 
         if(!iPorts)
         {
@@ -2700,7 +2662,7 @@ INSPECT_PDF,
     {
         if(!strcmp(PORTS, pcToken))
         {
-            iRet = ProcessPorts(ServerConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessPorts(ServerConf, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2708,7 +2670,7 @@ INSPECT_PDF,
         }
         else if(!strcmp(FLOW_DEPTH, pcToken) || !strcmp(SERVER_FLOW_DEPTH, pcToken))
         {
-            iRet = ProcessFlowDepth(ServerConf, HI_SI_SERVER_MODE, ErrorString, ErrStrLen, saveptr, pcToken, MAX_SERVER_DEPTH);
+            iRet = ProcessFlowDepth(ServerConf, HI_SI_SERVER_MODE, ErrorString, ErrStrLen, pcToken, MAX_SERVER_DEPTH);
             if (iRet)
             {
                 return iRet;
@@ -2716,7 +2678,7 @@ INSPECT_PDF,
         }
         else if(!strcmp(CLIENT_FLOW_DEPTH, pcToken))
         {
-            iRet = ProcessFlowDepth(ServerConf, HI_SI_CLIENT_MODE, ErrorString, ErrStrLen, saveptr, pcToken, MAX_CLIENT_DEPTH);
+            iRet = ProcessFlowDepth(ServerConf, HI_SI_CLIENT_MODE, ErrorString, ErrStrLen, pcToken, MAX_CLIENT_DEPTH);
             if (iRet)
             {
                 return iRet;
@@ -2724,7 +2686,7 @@ INSPECT_PDF,
         }
         else if(!strcmp(POST_DEPTH, pcToken))
         {
-            iRet = ProcessPostDepth(ServerConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessPostDepth(ServerConf, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2735,7 +2697,7 @@ INSPECT_PDF,
             iRet = ProcessIISUnicodeMap(&ServerConf->iis_unicode_map,
                                         &ServerConf->iis_unicode_map_filename,
                                         &ServerConf->iis_unicode_codepage,
-                                        ErrorString, ErrStrLen, saveptr);
+                                        ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2743,7 +2705,7 @@ INSPECT_PDF,
         }
         else if(!strcmp(CHUNK_LENGTH, pcToken))
         {
-            iRet = ProcessChunkLength(ServerConf,ErrorString,ErrStrLen, saveptr);
+            iRet = ProcessChunkLength(ServerConf,ErrorString,ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2751,7 +2713,7 @@ INSPECT_PDF,
         }
         else if(!strcmp(SMALL_CHUNK_LENGTH, pcToken))
         {
-            iRet = ProcessSmallChunkLength(ServerConf,ErrorString,ErrStrLen, saveptr);
+            iRet = ProcessSmallChunkLength(ServerConf,ErrorString,ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2811,7 +2773,7 @@ INSPECT_PDF,
                                     "Enable '%s' before setting '%s'", NORMALIZE_JS, MAX_JS_WS);
                 return -1;
             }
-            iRet = ProcessMaxSpaces(ServerConf, ErrorString, ErrStrLen, saveptr, MAX_JS_WS, CONFIG_MAX_JS_WS);
+            iRet = ProcessMaxSpaces(ServerConf, ErrorString, ErrStrLen, MAX_JS_WS, CONFIG_MAX_JS_WS);
             if (iRet)
             {
                 return iRet;
@@ -2819,7 +2781,7 @@ INSPECT_PDF,
         }
         else if(!strcmp(OVERSIZE_DIR, pcToken))
         {
-            iRet = ProcessOversizeDir(ServerConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessOversizeDir(ServerConf, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2841,7 +2803,7 @@ INSPECT_PDF,
         }
         else if (!strcmp(HTTP_METHODS, pcToken))
         {
-            iRet = ProcessHttpMethodList(ServerConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessHttpMethodList(ServerConf, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2887,7 +2849,7 @@ INSPECT_PDF,
                 return -1;
             }
 
-            ProcessDecompressionTypeList(ServerConf,pcToken,ErrorString,ErrStrLen, saveptr);
+            ProcessDecompressionTypeList(ServerConf,pcToken,ErrorString,ErrStrLen);
         }
 #endif
 #ifdef FILE_DECOMP_PDF
@@ -2900,7 +2862,7 @@ INSPECT_PDF,
                 return -1;
             }
 
-            ProcessDecompressionTypeList(ServerConf,pcToken,ErrorString,ErrStrLen, saveptr);
+            ProcessDecompressionTypeList(ServerConf,pcToken,ErrorString,ErrStrLen);
         }
 #endif
         /*
@@ -2909,7 +2871,7 @@ INSPECT_PDF,
         else if(!strcmp(ASCII, pcToken))
         {
             ConfOpt = &ServerConf->ascii;
-            iRet = ProcessConfOpt(ConfOpt, ASCII, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, ASCII, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2923,7 +2885,7 @@ INSPECT_PDF,
             ServerConf->ascii.on    = 1;
 
             ConfOpt = &ServerConf->utf_8;
-            iRet = ProcessConfOpt(ConfOpt, UTF_8, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, UTF_8, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2950,7 +2912,7 @@ INSPECT_PDF,
             ServerConf->ascii.on           = 1;
 
             ConfOpt = &ServerConf->iis_unicode;
-            iRet = ProcessConfOpt(ConfOpt, IIS_UNICODE, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, IIS_UNICODE, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2961,7 +2923,7 @@ INSPECT_PDF,
             ServerConf->ascii.on             = 1;
 
             ConfOpt = &ServerConf->double_decoding;
-            iRet = ProcessConfOpt(ConfOpt, DOUBLE_DECODE, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, DOUBLE_DECODE, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2979,7 +2941,7 @@ INSPECT_PDF,
             }
 
             ConfOpt = &ServerConf->u_encoding;
-            iRet = ProcessConfOpt(ConfOpt, U_ENCODE, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, U_ENCODE, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -2988,7 +2950,7 @@ INSPECT_PDF,
         else if(!strcmp(BARE_BYTE, pcToken))
         {
             ConfOpt = &ServerConf->bare_byte;
-            iRet = ProcessConfOpt(ConfOpt, BARE_BYTE, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, BARE_BYTE, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3004,11 +2966,11 @@ INSPECT_PDF,
 
             /* Need to get and chuck yes/no argument to option since
              * we're not doing anything with this anymore. */
-            pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+            pcToken = strtok(NULL, CONF_SEPARATORS);
         }
         else if(!strcmp(NON_RFC_CHAR, pcToken))
         {
-            iRet = ProcessNonRfcChar(ServerConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessNonRfcChar(ServerConf, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3017,7 +2979,7 @@ INSPECT_PDF,
         else if(!strcmp(MULTI_SLASH, pcToken))
         {
             ConfOpt = &ServerConf->multiple_slash;
-            iRet = ProcessConfOpt(ConfOpt, MULTI_SLASH, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, MULTI_SLASH, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3026,7 +2988,7 @@ INSPECT_PDF,
         else if(!strcmp(IIS_BACKSLASH, pcToken))
         {
             ConfOpt = &ServerConf->iis_backslash;
-            iRet = ProcessConfOpt(ConfOpt, IIS_BACKSLASH, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, IIS_BACKSLASH, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3035,7 +2997,7 @@ INSPECT_PDF,
         else if(!strcmp(DIRECTORY, pcToken))
         {
             ConfOpt = &ServerConf->directory;
-            iRet = ProcessConfOpt(ConfOpt, DIRECTORY, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, DIRECTORY, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3044,7 +3006,7 @@ INSPECT_PDF,
         else if(!strcmp(APACHE_WS, pcToken))
         {
             ConfOpt = &ServerConf->apache_whitespace;
-            iRet = ProcessConfOpt(ConfOpt, APACHE_WS, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, APACHE_WS, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3052,7 +3014,7 @@ INSPECT_PDF,
         }
         else if(!strcmp(WHITESPACE, pcToken))
         {
-            iRet = ProcessWhitespaceChars(ServerConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessWhitespaceChars(ServerConf, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3061,7 +3023,7 @@ INSPECT_PDF,
          else if(!strcmp(IIS_DELIMITER, pcToken))
         {
             ConfOpt = &ServerConf->iis_delimiter;
-            iRet = ProcessConfOpt(ConfOpt, IIS_DELIMITER, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, IIS_DELIMITER, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3070,7 +3032,7 @@ INSPECT_PDF,
         else if(!strcmp(WEBROOT, pcToken))
         {
             ConfOpt = &ServerConf->webroot;
-            iRet = ProcessConfOpt(ConfOpt, WEBROOT, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessConfOpt(ConfOpt, WEBROOT, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3078,7 +3040,7 @@ INSPECT_PDF,
         }
         else if(!strcmp(MAX_HDR_LENGTH, pcToken))
         {
-            iRet = ProcessMaxHdrLen(ServerConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessMaxHdrLen(ServerConf, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3086,7 +3048,7 @@ INSPECT_PDF,
         }
         else if(!strcmp(MAX_HEADERS, pcToken))
         {
-            iRet = ProcessMaxHeaders(ServerConf, ErrorString, ErrStrLen, saveptr);
+            iRet = ProcessMaxHeaders(ServerConf, ErrorString, ErrStrLen);
             if (iRet)
             {
                 return iRet;
@@ -3094,7 +3056,7 @@ INSPECT_PDF,
         }
         else if(!strcmp(MAX_SPACES, pcToken))
         {
-            iRet = ProcessMaxSpaces(ServerConf, ErrorString, ErrStrLen, saveptr, MAX_SPACES, CONFIG_MAX_SPACES);
+            iRet = ProcessMaxSpaces(ServerConf, ErrorString, ErrStrLen, MAX_SPACES, CONFIG_MAX_SPACES);
             if (iRet)
             {
                 return iRet;
@@ -3113,7 +3075,7 @@ INSPECT_PDF,
                 return -1;
             }
 
-            if( ((iRet = ProcessXFF_HeaderList(ServerConf, ErrorString, ErrStrLen, saveptr)) != 0)  )
+            if( ((iRet = ProcessXFF_HeaderList(ServerConf, ErrorString, ErrStrLen)) != 0)  )
             {
                 return iRet;
             }
@@ -3128,7 +3090,7 @@ INSPECT_PDF,
         }
         else if (!strcmp(LEGACY_MODE, pcToken))
         {
-            pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+            pcToken = strtok(NULL, CONF_SEPARATORS);
             if(pcToken ==  NULL)
                 break;
 
@@ -3154,7 +3116,7 @@ INSPECT_PDF,
             return -1;
         }
 
-    } while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL);
+    } while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL);
 
     return 0;
 }
@@ -3353,7 +3315,7 @@ static int PrintServerConf(HTTPINSPECT_CONF *ServerConf)
     LogMessage("%s\n", buf);
 
     LogMessage("      Legacy mode: %s\n",
-               ServerConf->h2_mode ? "YES" : "NO");
+               ServerConf->h2_mode ? "NO" : "YES");
 
     return 0;
 }
@@ -3387,7 +3349,7 @@ static void enableHiForConfiguredPorts( struct _SnortConfig *sc, HTTPINSPECT_CON
 }
 
 int ProcessUniqueServerConf(struct _SnortConfig *sc, HTTPINSPECT_GLOBAL_CONF *GlobalConf,
-                            char *ErrorString, int ErrStrLen, char **saveptr)
+                            char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     char *pIpAddressList = NULL;
@@ -3399,7 +3361,7 @@ int ProcessUniqueServerConf(struct _SnortConfig *sc, HTTPINSPECT_GLOBAL_CONF *Gl
     int iRet;
     int retVal = -1;
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(!pcToken)
     {
         SnortSnprintf(ErrorString, ErrStrLen,
@@ -3424,8 +3386,7 @@ int ProcessUniqueServerConf(struct _SnortConfig *sc, HTTPINSPECT_GLOBAL_CONF *Gl
         }
 
         GlobalConf->global_server =
-            (HTTPINSPECT_CONF *)SnortPreprocAlloc(1, sizeof(HTTPINSPECT_CONF),
-                                     PP_HTTPINSPECT, PP_MEM_CATEGORY_CONFIG);
+            (HTTPINSPECT_CONF *)SnortAlloc(sizeof(HTTPINSPECT_CONF));
 
         ServerConf = GlobalConf->global_server;
 
@@ -3437,7 +3398,7 @@ int ProcessUniqueServerConf(struct _SnortConfig *sc, HTTPINSPECT_GLOBAL_CONF *Gl
             return -1;
         }
 
-        iRet = ProcessServerConf(GlobalConf, ServerConf, ErrorString, ErrStrLen, saveptr);
+        iRet = ProcessServerConf(GlobalConf, ServerConf, ErrorString, ErrStrLen);
         if (iRet)
         {
             retVal =  iRet;
@@ -3462,7 +3423,7 @@ int ProcessUniqueServerConf(struct _SnortConfig *sc, HTTPINSPECT_GLOBAL_CONF *Gl
         if(strcmp(START_IPADDR_LIST, pcToken) == 0)
         {
             /*list begin token matched*/
-            if ((pIpAddressList = strtok_r(NULL, END_IPADDR_LIST, saveptr)) == NULL)
+            if ((pIpAddressList = strtok(NULL, END_IPADDR_LIST)) == NULL)
             {
                 SnortSnprintf(ErrorString, ErrStrLen,
                         "Invalid IP Address list in '%s' token.", SERVER);
@@ -3506,8 +3467,7 @@ int ProcessUniqueServerConf(struct _SnortConfig *sc, HTTPINSPECT_GLOBAL_CONF *Gl
              */
             if (firstIpAddress)
             {
-                ServerConf = (HTTPINSPECT_CONF *)SnortPreprocAlloc(1, sizeof(HTTPINSPECT_CONF),
-                                                      PP_HTTPINSPECT, PP_MEM_CATEGORY_CONFIG);
+                ServerConf = (HTTPINSPECT_CONF *)calloc(1, sizeof(HTTPINSPECT_CONF));
                 if(!ServerConf)
                 {
                     SnortSnprintf(ErrorString, ErrStrLen,
@@ -3516,7 +3476,7 @@ int ProcessUniqueServerConf(struct _SnortConfig *sc, HTTPINSPECT_GLOBAL_CONF *Gl
                     goto _return;
                 }
 
-                iRet = ProcessServerConf(GlobalConf, ServerConf, ErrorString, ErrStrLen, saveptr);
+                iRet = ProcessServerConf(GlobalConf, ServerConf, ErrorString, ErrStrLen);
                 if (iRet)
                 {
                     retVal = iRet;
@@ -3621,8 +3581,6 @@ int PrintGlobalConf(HTTPINSPECT_GLOBAL_CONF *GlobalConf)
                GlobalConf->compr_depth);
     LogMessage("      Gzip Decompress Depth: %d\n",
                GlobalConf->decompr_depth);
-    LogMessage("      Normalize Random Nulls in Text: %s\n",
-               GlobalConf->normalize_nulls ? "YES" : "NO");
 
     return 0;
 }
@@ -3903,276 +3861,23 @@ static inline void setFileName(Packet *p)
     file_api->set_file_name (p->ssnptr, buf, len, false);
 }
 
-
-static inline bool rfc_2616_token(u_char c)
-{
-    return isalpha(c) || isdigit(c) ||
-        c == '!' || c == '#' || c == '$' || c == '%' ||
-        c == '&' || c == '\'' || c == '*' || c == '+' ||
-        c == '-' || c == '.' || c == '^' || c == '_' ||
-        c == '`' || c == '|' || c == '~';
-}
-
-static inline bool rfc5987_attr_char(u_char c)
-{
-    return rfc_2616_token(c) && (( c != '*')|| (c !='\'') || (c !='%'));
-}
-
-
-/* Extract the filename from the content-dispostion header- RFC6266 */
-static inline int extract_file_name(u_char *start, int length, u_char **fname_ptr, uint8_t *charset)
-{
-    u_char *cur = start, *tmp = NULL;
-    u_char *end = start+length;
-    u_char *fname_begin = NULL;
-    u_char *fname_end = NULL;
-    bool char_set = false;
-    enum {
-        CD_STATE_START,
-        CD_STATE_BEFORE_VAL,
-        CD_STATE_VAL,
-        CD_STATE_QUOTED_VAL,
-        CD_STATE_BEFORE_EXT_VAL,
-        CD_STATE_CHARSET,
-        CD_STATE_LANGUAGE,
-        CD_STATE_EXT_VAL,
-        CD_STATE_FINAL
-    };
-    const char *cd_file1 = "filename";
-    const char *cd_file2 = "filename*";
-
-    if (length <= 0)
-	    return -1;
-    uint8_t state = CD_STATE_START;
-
-    while(cur < end)
-    {
-        switch(state)
-        {
-            case CD_STATE_START:
-                {
-                    if( (tmp = (u_char *)SnortStrcasestr((const char *)cur, end-cur, cd_file2)))
-                    {
-                        state = CD_STATE_BEFORE_EXT_VAL;
-                        cur = tmp + strlen(cd_file2)-1;
-                    }
-                    else if( (tmp = (u_char *)SnortStrcasestr((const char *)cur, end-cur, cd_file1)))
-                    {
-                        state = CD_STATE_BEFORE_VAL;
-                        cur = tmp + strlen(cd_file1)-1;
-                    }
-                    else
-                        return -1;
-                }
-                break;
-            case CD_STATE_BEFORE_VAL:
-                {
-                    if(*cur == '=')
-                        state = CD_STATE_VAL;
-                    else if( *cur != ' ')
-                        state = CD_STATE_START;
-                }
-                break;
-            case CD_STATE_VAL:
-                {
-                    if( !fname_begin && *cur == '"')
-                        state = CD_STATE_QUOTED_VAL;
-                    else if(rfc_2616_token(*cur))
-                    {
-                        if(!fname_begin)
-                            fname_begin = cur;
-                    }
-                    else if(*cur == ';' || *cur == '\r' || *cur == '\n' || *cur == ' ' || *cur == '\t')
-                    {
-                        if(fname_begin)
-                        {
-                            fname_end = cur - 1;
-                            state =  CD_STATE_FINAL;
-                        }
-                    }
-                    else
-                       return -1;
-                }
-                break;
-            case CD_STATE_QUOTED_VAL:
-                {
-                    if(!fname_begin)
-                        fname_begin = cur;
-                    if(*cur == '"' )
-                    {
-                        fname_end = cur;
-                        state =  CD_STATE_FINAL;
-                    }
-                }
-                break;
-
-            case CD_STATE_BEFORE_EXT_VAL:
-                {
-                    if(*cur == '=')
-                        state = CD_STATE_CHARSET;
-                    else if( *cur != ' ')
-                        state = CD_STATE_START;
-                }
-                break;
-            case CD_STATE_CHARSET:
-                {
-                    if( *cur == '\'')
-                    {
-                        if(!char_set)
-                            return -1;
-                        else
-                            state = CD_STATE_LANGUAGE;
-                    }
-                    else if(!char_set)
-                    {
-                        /* Ignore space before the ext-value */
-                        while(cur < end && *cur == ' ' )
-                            cur++;
-                        if(cur < end)
-                        {
-                            if(!strncasecmp((const char*)cur,"UTF-8",5))
-                            {
-                                *charset = CD_CHARSET_UTF8;
-                                cur += 5;
-                            }
-                            else if(!strncasecmp((const char *)cur,"ISO-8859-1",10))
-                            {
-                                *charset = CD_CHARSET_ISO_9959_1;
-                                cur += 10;
-                            }
-                            else if(!strncasecmp((const char *)cur,"mime-charset",12))
-                            {
-                                *charset = CD_CHARSET_MIME;
-                                cur+=12;
-                            }
-                            else
-                                return -1;
-                            char_set = true;
-                            continue;
-                        }
-                    }
-                    else
-                        return -1;
-                }
-                break;
-            case CD_STATE_LANGUAGE:
-                {
-                    if(*cur == '\'')
-                        state = CD_STATE_EXT_VAL;
-                }
-                break;
-            case CD_STATE_EXT_VAL:
-                {
-                    if(!rfc5987_attr_char(*cur))
-                    {
-                        if(*cur == '%')
-                        {
-                            //Percent encoded, check if the next two digits are hex
-                            if(!fname_begin)
-                                fname_begin = cur;
-                            if( !(cur+2 < end && isxdigit(*++cur) && isxdigit(*++cur)))
-                                return -1;
-                        }
-                        else if(*cur == ';' || *cur == '\r' || *cur == '\n' || *cur == ' ' || *cur == '\t')
-                        {
-                            fname_end = cur;
-                            state = CD_STATE_FINAL;
-                        }
-                    }
-                    else
-                    {
-                         if(!fname_begin)
-                             fname_begin = cur;
-                    }
-                }
-                break;
-            case CD_STATE_FINAL:
-                {
-                    if(fname_begin && fname_end)
-                    {
-                        *fname_ptr = fname_begin;
-                        return fname_end-fname_begin;
-                    }
-                }
-            default:
-                return -1;
-        }
-        cur++;
-    }
-    switch(state)
-    {
-        case CD_STATE_FINAL:
-        case CD_STATE_VAL:
-        case CD_STATE_EXT_VAL:
-        {
-            if(fname_begin)
-            {
-                *fname_ptr = fname_begin;
-                 if(!fname_end)
-                     fname_end = end;
-                 return fname_end-fname_begin;
-            }
-        }
-    }
-    return -1;
-}
-
-static bool set_file_name_cd_header(u_char *start, u_char *end, void *ssn)
-{
-    uint8_t unfold_buf[DECODE_BLEN] = {0};
-    uint32_t unfold_size =0;
-    int num_spaces = 0;
-    u_char *p = start;
-    u_char *fname = NULL;
-    int len = 0;
-    uint8_t charset = 0;
-
-    sf_unfold_header(p, end-p, unfold_buf, sizeof(unfold_buf), &unfold_size, 0 , &num_spaces);
-    if(!unfold_size)
-        return false;
-
-    if((len = extract_file_name(unfold_buf, unfold_size, &fname, &charset)) > 0 )
-    {
-        //Strip the size to 255 if bigger
-        file_api->set_file_name(ssn, fname, len > 255 ? 255:len, true);
-        return true;
-    }
-    return false;
-}
-
-static inline bool is_boundary_present(const u_char *start, const u_char *end)
-{
-    uint8_t unfold_buf[DECODE_BLEN] = {0};
-    uint32_t unfold_size =0;
-    int num_spaces = 0;
-    const u_char *p = start;
-    const char  *BOUNDARY_STR = "boundary=";
-
-    sf_unfold_header(p, end-p, unfold_buf, sizeof(unfold_buf), &unfold_size, 0 , &num_spaces);
-    if(!unfold_size)
-        return false;
-
-    return SnortStrcasestr((const char *)unfold_buf, unfold_size, BOUNDARY_STR);
-     
-}
-
 static inline int processPostFileData(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packet *p, HI_SESSION *Session, HttpSessionData *hsd)
 {
-    const u_char *start = Session->client.request.content_type;
-    const u_char *end = (Session->client.request.post_raw + Session->client.request.post_raw_size);
+    uint8_t *start = (uint8_t *)(Session->client.request.content_type);
 
-    if ( !PacketHasPAFPayload(p) || (p->packet_flags & PKT_PSEUDO_FLUSH))
+    if ( !PacketHasPAFPayload(p) )
         return 0;
 
-    if ( hsd && start && is_boundary_present(start, end))
+    if ( hsd && start )
     {
         /* mime parsing
          * mime boundary should be processed before this
          */
+        uint8_t *end;
+
         if (!hsd->mime_ssn)
         {
-            hsd->mime_ssn = (MimeState *)SnortPreprocAlloc(1, sizeof(MimeState),
-                                              PP_HTTPINSPECT, PP_MEM_CATEGORY_CONFIG);
+            hsd->mime_ssn = (MimeState *)SnortAlloc(sizeof(MimeState));
             if (!hsd->mime_ssn)
                 return -1;
             hsd->mime_ssn->log_config = &(GlobalConf->mime_conf);
@@ -4181,7 +3886,7 @@ static inline int processPostFileData(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packe
             hsd->mime_ssn->log_mempool = mime_log_mempool;
             /*Set log buffers per session*/
             if (file_api->set_log_buffers(&(hsd->mime_ssn->log_state),
-                    hsd->mime_ssn->log_config, hsd->mime_ssn->log_mempool, p->ssnptr, PP_HTTPINSPECT) < 0)
+                    hsd->mime_ssn->log_config, hsd->mime_ssn->log_mempool) < 0)
             {
                 return -1;
             }
@@ -4191,25 +3896,16 @@ static inline int processPostFileData(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packe
             file_api->reset_mime_paf_state(&(hsd->mime_ssn->mime_boundary));
         }
 
-        file_api->process_mime_data(p, start, end, hsd->mime_ssn, 1, false,"HTTP", PP_HTTPINSPECT);
+        end = (uint8_t *)(Session->client.request.post_raw + Session->client.request.post_raw_size);
+        file_api->process_mime_data(p, start, end, hsd->mime_ssn, 1, false);
     }
     else
     {
         if (file_api->file_process(p,(uint8_t *)Session->client.request.post_raw,
                 (uint16_t)Session->client.request.post_raw_size,
-                    file_api->get_file_position(p), true, false, false))
+                    file_api->get_file_position(p), true, false))
         {
-            if( Session->client.request.content_disp )
-            {
-                if(!set_file_name_cd_header((u_char *)Session->client.request.content_disp,(u_char *)end, p->ssnptr))
-                {
-                    setFileName(p);
-                }
-            }
-            else
-            {
-                setFileName(p);
-            }
+            setFileName(p);
         }
     }
     return 0;
@@ -4222,12 +3918,12 @@ static inline void processFileData(Packet *p, HttpSessionData *hsd, bool *filePr
     if (hsd->mime_ssn)
     {
         uint8_t *end = ( uint8_t *)(p->data) + p->dsize;
-        file_api->process_mime_data(p, p->data, end, hsd->mime_ssn, 1, false, "HTTP", PP_HTTPINSPECT);
+        file_api->process_mime_data(p, p->data, end, hsd->mime_ssn, 1, false);
         *fileProcessed = true;
     }
     else if (file_api->get_file_processed_size(p->ssnptr) >0)
     {
-        file_api->file_process(p, (uint8_t *)p->data, p->dsize, file_api->get_file_position(p), true, false, false);
+        file_api->file_process(p, (uint8_t *)p->data, p->dsize, file_api->get_file_position(p), true, false);
         *fileProcessed = true;
     }
 }
@@ -4267,29 +3963,6 @@ static inline int get_file_current_position(Packet *p,bool decomp_more,bool is_f
         }
     }
     return file_data_position;
-}
-
-char *convert_range_flag_to_str(uint16_t range_flag)
-{
-    switch (range_flag)
-    {
-        case HTTP_RESP_RANGE_NONE:
-            return "Range None";
-        case RANGE_WITH_RESP_FULL_CONTENT:
-            return "Full Content";
-        case RANGE_WITH_RESP_PARTIAL_CONTENT:
-            return "Partial Content";
-        case RANGE_WITH_RESP_ERROR:
-            return "Error in Range Field";
-        case RANGE_WITH_RESP_NON_BYTE:
-            return "Non-Byte unit";
-        case RANGE_WITH_UNKNOWN_CONTENT_RANGE:
-            return "Unknown Range Content";
-        case RANGE_WITH_RESP_UNKNOWN_CONTENT_SIZE:
-            return "Unknown Range Content Length";
-        default:
-            return "Skip Range";
-    }
 }
 
 /*
@@ -4335,16 +4008,9 @@ int SnortHttpInspect(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packet *p)
     bool fileProcessed = false;
     bool is_first = true;
 
-    if (stream_api && stream_api->is_session_http2(p->ssnptr)
-        && !(p->packet_flags & PKT_REBUILT_STREAM)
-        && !(p->packet_flags & PKT_PDU_TAIL))
-    {
-        return 0;
-    }
-
     PROFILE_VARS;
 
-    if(!(stream_api->get_preproc_flags(p->ssnptr) & PP_HTTPINSPECT_PAF_FLUSH_POST_HDR))
+    if(!(stream_api->get_proto_flags(p->ssnptr) & PROTO_HTTP_PAF_FLUSH_POST_HDR))
         hi_stats.total++;
 
     /*
@@ -4454,7 +4120,6 @@ int SnortHttpInspect(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packet *p)
         }
 
         p->packet_flags |= PKT_HTTP_DECODE;
-        HttpLogFuncs(GlobalConf, hsd, p, iCallDetect);
 
         if ( p->alt_dsize == 0 )
         {
@@ -4496,7 +4161,6 @@ int SnortHttpInspect(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packet *p)
     **  requests in this way doesn't require any memory or tracking overhead.
     **  Instead, we just process each request linearly.
     */
-    uint16_t vlanId = p->vh ? VTH_VLAN( p->vh ) : 0;
     if (hsd->decomp_state)
         hsd->decomp_state->stage = HTTP_DECOMP_START;
     do
@@ -4742,31 +4406,6 @@ int SnortHttpInspect(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packet *p)
                 }
             }
 
-            if (Session->client.request.range_flag != HTTP_RANGE_NONE)
-            {
-                if (Session->client.request.method != HI_GET_METHOD)
-                {
-                    if (hi_eo_generate_event(Session, HI_EO_CLIENT_RANGE_NON_GET_METHOD))
-                    {
-                        hi_eo_client_event_log(Session, HI_EO_CLIENT_RANGE_NON_GET_METHOD, NULL, NULL);
-                    } 
-                }
-                else
-                {
-                    if (Session->client.request.range_flag == RANGE_WITH_REQ_ERROR)
-                    {
-                        if (hi_eo_generate_event(Session, HI_EO_CLIENT_RANGE_FIELD_ERROR))
-                        {
-                            hi_eo_client_event_log(Session, HI_EO_CLIENT_RANGE_FIELD_ERROR, NULL, NULL);
-                        } 
-                    }
-                    else
-                    {
-                        if (vlanId == 0) 
-                            hsd->resp_state.look_for_partial_content |= GET_REQ_WITH_RANGE;
-                    }
-                }
-            }
         }
         else   /* Server mode */
         {
@@ -4891,39 +4530,12 @@ int SnortHttpInspect(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packet *p)
                      Session->server.response.status_code,
                      Session->server.response.status_code_size);
                  
-                 if (!strncmp((const char*)Session->server.response.status_code, "206", 3))
+                 if (!strncmp((const char*)Session->server.response.status_code, "206", 3) && !hsd->resp_state.eoh_found)
                  {
-                     if ((Session->server.response.range_flag == RANGE_WITH_RESP_ERROR) && 
-                         hi_eo_generate_event(Session, HI_EO_SERVER_RANGE_FIELD_ERROR))
-                     {
-                         hi_eo_server_event_log(Session, HI_EO_SERVER_RANGE_FIELD_ERROR, NULL, NULL);
-                     }
-                     if ((vlanId == 0) && !(hsd->resp_state.look_for_partial_content &= GET_REQ_WITH_RANGE) &&
-                         hi_eo_generate_event(Session, HI_EO_SERVER_NON_RANGE_GET_PARTIAL_METHOD))
-                     {
-                         hi_eo_server_event_log(Session, HI_EO_SERVER_NON_RANGE_GET_PARTIAL_METHOD, NULL, NULL);
-                     }
-                     
-                     if (Session->server.response.range_flag == HTTP_RESP_RANGE_NONE)
-                     {
-                         hsd->resp_state.look_for_partial_content |= CONTENT_NONE;
-                     }
-                     else if (Session->server.response.range_flag == RANGE_WITH_RESP_FULL_CONTENT)
-                     {
-                         hsd->resp_state.look_for_partial_content |= FULL_CONTENT;
-                     }
-                     else
-                     {
-                         hsd->resp_state.look_for_partial_content |= PARTIAL_CONTENT;
-                     }
-
-                     if ((Session->client.request.range_flag == HTTP_RANGE_WITH_FULL_CONTENT_REQ) && 
-                         ((Session->server.response.range_flag == RANGE_WITH_RESP_UNKNOWN_CONTENT_SIZE) ||
-                          (Session->server.response.range_flag == RANGE_WITH_UNKNOWN_CONTENT_RANGE) ||
-                          (Session->server.response.range_flag == RANGE_WITH_RESP_ERROR)))
-                     {
-                         hsd->resp_state.look_for_partial_content |= FULL_CONTENT;
-                     } 
+                    /* If status code 206 is seen but EOH is not seen, then look for partial content
+                     * in subsequent packets
+                     */
+                    hsd->resp_state.look_for_partial_content = true;
                  }
 
 #ifdef DUMP_BUFFER
@@ -4998,9 +4610,9 @@ int SnortHttpInspect(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packet *p)
                      else
                      {
                          Session->server.response.body = hsd->fd_state->Buffer;
-                         Session->server.response.body_size = (DECODE_BLEN - hsd->fd_state->Avail_Out);
-                         Session->server.response.body_raw = Data;
-                         Session->server.response.body_raw_size = Data_Len;
+                         Session->server.response.body_size = hsd->fd_state->Total_Out;
+                         Session->server.response.body_raw = hsd->fd_state->Buffer;
+                         Session->server.response.body_raw_size = hsd->fd_state->Total_Out;
                      }
 
                      setFileDataPtr(Session->server.response.body, (uint16_t)Session->server.response.body_size);
@@ -5016,11 +4628,9 @@ int SnortHttpInspect(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packet *p)
 #endif
                  }
 
-                 if (ScPafEnabled() && PacketHasPAFPayload(p) && !(p->packet_flags & PKT_PSEUDO_FLUSH))
+                 if (ScPafEnabled() && PacketHasPAFPayload(p))
                  {
                      bool decomp_more = (hsd->decomp_state && hsd->decomp_state->stage == HTTP_DECOMP_MID)?true:false;
-                     char *pfile_type = NULL;
-
                      int file_data_position = get_file_current_position(p,decomp_more,is_first);
 
                      if (file_data_position == SNORT_FILE_POSITION_UNKNOWN && hsd->resp_state.eoh_found)
@@ -5029,26 +4639,9 @@ int SnortHttpInspect(HTTPINSPECT_GLOBAL_CONF *GlobalConf, Packet *p)
                      }
                      if (file_api->file_process(p, (uint8_t *)Session->server.response.body_raw,
                                                    (uint16_t)Session->server.response.body_raw_size,
-                                                   file_data_position, false, false, false))
+                                                   file_data_position, false, false))
                      {
                          setFileName(p);
-                     }
-                     if (GlobalConf->normalize_nulls)
-                     {
-                         /* Call File API to get the file type */
-                         pfile_type = file_api->file_get_filetype (p->ssnptr);
-                         if (pfile_type)
-                         {
-                             if (SnortStrcasestr(pfile_type,strlen(pfile_type), "Unknown" ) ||
-                                SnortStrcasestr(pfile_type,strlen(pfile_type), "RTF" ))
-                             {
-
-                                 Session->server.response.body_size = NormalizeRandomNulls(
-                                                                  (uint8_t*) Session->server.response.body,
-                                                                  Session->server.response.body_size,
-                                                                  (uint8_t*) Session->server.response.body);
-                             }
-                         }
                      }
                  }
                  is_first = false;
@@ -5180,18 +4773,15 @@ HttpSessionData * SetNewHttpSessionData(Packet *p, void *data)
     if (p->ssnptr == NULL)
         return NULL;
 
-    hi_stats.session_count++;          
 
-    hsd = (HttpSessionData *)SnortPreprocAlloc(1, sizeof(HttpSessionData), 
-                                  PP_HTTPINSPECT, PP_MEM_CATEGORY_SESSION);
-    hi_stats.mem_used += (sizeof(HttpSessionData) + sizeof(DECOMPRESS_STATE) + sizeof(HTTP_LOG_STATE));
+    hsd = (HttpSessionData *)SnortAlloc(sizeof(HttpSessionData));
     init_decode_utf_state(&hsd->utf_state);
 
     session_api->set_application_data(p->ssnptr, PP_HTTPINSPECT, hsd, FreeHttpSessionData);
 
     hsd->fd_state = (fd_session_p_t)NULL;
     hsd->resp_state.eoh_found = false;
-    hsd->resp_state.look_for_partial_content = CONTENT_NONE;
+    hsd->resp_state.look_for_partial_content = false;
     hsd->resp_state.chunk_len_state = CHUNK_LEN_DEFAULT;
 
     return hsd;
@@ -5203,7 +4793,6 @@ void FreeHttpSessionData(void *data)
 
     if (hsd == NULL)
         return;
-    hi_stats.session_count--;    
 
     if (hsd->decomp_state != NULL)
     {
@@ -5214,8 +4803,7 @@ void FreeHttpSessionData(void *data)
     if (hsd->log_state != NULL)
     {
         mempool_free(http_mempool, hsd->log_state->log_bucket);
-        SnortPreprocFree(hsd->log_state, sizeof(HTTP_LOG_STATE), PP_HTTPINSPECT, 
-             PP_MEM_CATEGORY_SESSION);
+        free(hsd->log_state);
     }
 
     while(hsd->tList_start != NULL )
@@ -5229,8 +4817,7 @@ void FreeHttpSessionData(void *data)
         hsd->fd_state = NULL;                  // ...just for good measure
     }
 
-    hi_stats.mem_used -= (sizeof(HttpSessionData) + sizeof(DECOMPRESS_STATE) + sizeof(HTTP_LOG_STATE));
-    SnortPreprocFree(hsd, sizeof(HttpSessionData), PP_HTTPINSPECT, PP_MEM_CATEGORY_SESSION);
+    free(hsd);
 }
 
 int GetHttpTrueIP(void *data, uint8_t **buf, uint32_t *len, uint32_t *type)
@@ -5418,17 +5005,6 @@ int HI_SearchStrFound(void *id, void *unused, int index, void *data, void *unuse
     return 1;
 }
 
-bool GetHttpFastBlockingStatus()
-{
-    HTTPINSPECT_GLOBAL_CONF *http_conf = NULL;
-    tSfPolicyId policyId = getNapRuntimePolicy();
-
-    sfPolicyUserPolicySet(hi_config, policyId);
-    http_conf =  (HTTPINSPECT_GLOBAL_CONF *)sfPolicyUserDataGetCurrent(hi_config);
-
-    return(http_conf->fast_blocking);
-}
-
 static int GetHttpInspectConf( void *ssn, uint32_t flags, HTTPINSPECT_CONF **serverConf, HTTPINSPECT_CONF **clientConf )
 {
     int iRet = HI_SUCCESS;
@@ -5516,17 +5092,17 @@ int GetHttpFlowDepth(void *ssn, uint32_t flags)
     return flow_depth;
 }
 
-uint8_t isHttpRespPartialCont(void *data)
+bool isHttpRespPartialCont(void *data)
 {
     HttpSessionData *hsd = NULL;
 
     if (data == NULL) {
-        return CONTENT_NONE;
+        return false;
     }
 
     hsd = (HttpSessionData *)session_api->get_application_data(data, PP_HTTPINSPECT);
     if (hsd == NULL) {
-        return CONTENT_NONE;
+        return false;
     }
 
     return hsd->resp_state.look_for_partial_content;

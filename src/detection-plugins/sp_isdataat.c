@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
- ** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ ** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  ** Copyright (C) 1998-2013 Sourcefire, Inc.
  **
  ** This program is free software; you can redistribute it and/or modify
@@ -219,17 +219,12 @@ void IsDataAtParse(char *data, IsDataAtData *idx, OptTreeNode *otn)
     char *cptr;
     char *endp;
     char *offset;
-    if(!data)
-    {
-	    FatalError("%s (%d): Bad arguments to IsDataAt: (null)\n", file_name,file_line);
-    }
 
-    toks = mSplit(data, ",", ISDATAAT_MAX_ARG, &num_toks, 0);
-    if(num_toks > ISDATAAT_MAX_ARG || num_toks < 1)
-    {
-	    FatalError("%s (%d): Bad arguments to IsDataAt: %s\n", file_name,
-			    file_line, data);
-    }
+    toks = mSplit(data, ",", 3, &num_toks, 0);
+
+    if(num_toks > 3)
+        FatalError("%s (%d): Bad arguments to IsDataAt: %s\n", file_name,
+                file_line, data);
     offset = toks[0];
     if(*offset == '!')
     {
@@ -258,10 +253,13 @@ void IsDataAtParse(char *data, IsDataAtData *idx, OptTreeNode *otn)
     }
     else
     {
-        idx->offset_var = find_value(offset);
-        if (idx->offset_var == BYTE_EXTRACT_NO_VAR)
+        if (bytemath_variable_name && (strcmp(bytemath_variable_name,offset) == 0))
+              idx->offset_var= BYTE_MATH_VAR_INDEX;
+        else
         {
-            ParseError(BYTE_EXTRACT_INVALID_ERR_FMT, "isdataat", toks[0]);
+           idx->offset_var = GetVarByName(offset);
+           if (idx->offset_var == BYTE_EXTRACT_NO_VAR)
+              ParseError(BYTE_EXTRACT_INVALID_ERR_FMT, "isdataat", toks[0]);
         }
     }
 
@@ -328,16 +326,11 @@ int IsDataAt(void *option_data, Packet *p)
     if (isdata->offset_var >= 0 )
     {
         if(isdata->offset_var == BYTE_MATH_VAR_INDEX )
+             isdata->offset = (int32_t) bytemath_variable;
+        else
         {
-            isdata->offset = (int32_t) bytemath_variable;
-        }
-        else if(isdata->offset_var == COMMON_VAR_INDEX )
-        {
-            isdata->offset = (int32_t) common_var;
-        }
-        else if (isdata->offset_var < NUM_BYTE_EXTRACT_VARS)
-        { 
-            GetByteExtractValue(&(isdata->offset), isdata->offset_var);
+            if (isdata->offset_var < NUM_BYTE_EXTRACT_VARS)
+               GetByteExtractValue(&(isdata->offset), isdata->offset_var);
         }
     }
 

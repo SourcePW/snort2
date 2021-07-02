@@ -4,7 +4,7 @@ SUBDIRS = src doc etc templates rpm m4 preproc_rules tools
 
 INCLUDES = @INCLUDES@
 
-EXTRA_DIST = ChangeLog snort.8 LICENSE verstuff.pl RELEASE.NOTES snort.pc.in VERSION
+EXTRA_DIST = ChangeLog snort.8 LICENSE verstuff.pl RELEASE.NOTES snort.pc.in
 
 man_MANS = snort.8
 

@@ -777,7 +777,6 @@ SOURCE=..\..\preprocessors\HttpInspect\files\file_decomp_SWF.c
 # Begin Source File
 
 SOURCE=..\..\preprocessors\Stream6\snort_stream_icmp.c
-
 # End Source File
 # Begin Source File
 
@@ -786,7 +785,6 @@ SOURCE=..\..\preprocessors\Stream6\snort_stream_icmp.h
 # Begin Source File
 
 SOURCE=..\..\preprocessors\Stream6\snort_stream_ip.c
-
 # End Source File
 # Begin Source File
 
@@ -795,7 +793,6 @@ SOURCE=..\..\preprocessors\Stream6\snort_stream_ip.h
 # Begin Source File
 
 SOURCE=..\..\preprocessors\Stream6\snort_stream_tcp.c
-
 # End Source File
 # Begin Source File
 
@@ -804,7 +801,6 @@ SOURCE=..\..\preprocessors\Stream6\snort_stream_tcp.h
 # Begin Source File
 
 SOURCE=..\..\preprocessors\Stream6\snort_stream_udp.c
-
 # End Source File
 # Begin Source File
 
@@ -813,7 +809,6 @@ SOURCE=..\..\preprocessors\Stream6\snort_stream_udp.h
 # Begin Source File
 
 SOURCE=..\..\preprocessors\Stream6\stream_common.c
-
 # End Source File
 # Begin Source File
 
@@ -822,7 +817,6 @@ SOURCE=..\..\preprocessors\Stream6\stream_common.h
 # Begin Source File
 
 SOURCE=..\..\preprocessors\Stream6\stream_paf.c
-
 # End Source File
 # Begin Source File
 
@@ -1443,14 +1437,6 @@ SOURCE="..\..\dynamic-plugins\sf_dynamic_preprocessor.h"
 # End Source File
 # Begin Source File
 
-SOURCE="..\..\dynamic-plugins\sf_dynamic_decompression.c"
-# End Source File
-# Begin Source File
-
-SOURCE="..\..\dynamic-plugins\sf_dynamic_decompression.h"
-# End Source File
-# Begin Source File
-
 SOURCE="..\..\dynamic-plugins\sp_dynamic.c"
 # End Source File
 # Begin Source File
@@ -1789,8 +1775,6 @@ SOURCE=..\..\decode.h
 SOURCE=..\..\detect.c
 
 !IF  "$(CFG)" == "snort - Win32 Release"
-
-# ADD CPP /I "..\..\preprocessors\Stream6" /I "..\..\preprocessors\Session"
 
 !ELSEIF  "$(CFG)" == "snort - Win32 Debug"
 

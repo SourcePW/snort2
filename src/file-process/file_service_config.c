@@ -1,7 +1,7 @@
 /*
  **
  **
- **  Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ **  Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  **  Copyright (C) 2012-2013 Sourcefire, Inc.
  **
  **  This program is free software; you can redistribute it and/or modify
@@ -36,14 +36,12 @@
 #include "sf_types.h"
 #include "util.h"
 #include "mstring.h"
-#include "memory_stats.h"
 #include "parser.h"
 
 #include "file_service_config.h"
 #include "file_config.h"
 #include "file_lib.h"
 #include "file_capture.h"
-#include "file_ss.h"
 
 #define FILE_SERVICE_OPT__TYPE_DEPTH            "file_type_depth"
 #define FILE_SERVICE_OPT__SIG_DEPTH             "file_signature_depth"
@@ -89,6 +87,10 @@
 #include "file_api.h"
 #endif
 
+#ifdef SNORT_RELOAD
+bool file_service_reconfigured = false;
+#endif
+
 /*Set default values for file config*/
 static inline void file_service_config_defaults(FileConfig *file_config)
 {
@@ -108,50 +110,26 @@ static inline void file_service_config_defaults(FileConfig *file_config)
     file_config->file_capture_block_size = DEFAULT_FILE_CAPTURE_BLOCK_SIZE;
 }
 
-FileConfig* file_service_config_create(void)
+void* file_service_config_create(void)
 {
-    FileConfig *file_config = SnortPreprocAlloc(1, sizeof(*file_config), PP_FILE, PP_MEM_CATEGORY_CONFIG);
+    FileConfig *file_config = SnortAlloc(sizeof(*file_config));
 
     file_service_config_defaults(file_config);
     return file_config;
 }
 
-#if defined (SIDE_CHANNEL)
-void check_sidechannel_enabled(void *config)
-{
-  FileConfig *file_config = (FileConfig *)config;
-  if(ScSideChannelEnabled())
-  {
-    file_config->use_side_channel = true;
-
-    LogMessage("File service config: \n");
-
-    LogMessage("    File side channel enabled =  %d \n",file_config->use_side_channel);
-  }
-  return;
-}
-#endif
-#if defined (SIDE_CHANNEL) && defined (REG_TEST)
-void FileSSConfigFree(void *config)
-{
-  FileConfig *file_config = (FileConfig *)config;
-  FileSSConfig *file_ss_config = file_config->file_ss_config;
-    if (file_ss_config == NULL)
-        return;
-    /* Not changing the free here because memory is allocated using strdup */
-    if (file_ss_config->startup_input_file)
-        free(file_ss_config->startup_input_file);
-
-    /* Not changing the free here because memory is allocated using strdup */
-    if (file_ss_config->runtime_output_file)
-        free(file_ss_config->runtime_output_file);
-
-    SnortPreprocFree(file_ss_config, sizeof(FileSSConfig), PP_FILE, PP_MEM_CATEGORY_CONFIG);
-    return;
-}
-#endif
-
 #ifdef SNORT_RELOAD
+/* Force reconfigure file service
+ *
+ * Args:
+ *    true: reconfigure file service
+ *    false: no change
+ */
+void  file_sevice_reconfig_set(bool reconfigured)
+{
+    file_service_reconfigured = reconfigured;
+}
+
 /* Verify the file service configuration, changing memory settings and depth
  * settings requires snort restart
  */
@@ -177,9 +155,15 @@ int file_sevice_config_verify(SnortConfig *old, SnortConfig *new)
         next = &tmp;
         file_service_config_defaults(next);
     }
-#if defined (SIDE_CHANNEL) && !defined (REG_TEST)
-    check_sidechannel_enabled(curr);
-#endif
+
+    /* Enable file type, file signature or file capture requires a restart*/
+    if (file_service_reconfigured)
+    {
+        ErrorMessage("File service: enable/disable file service"
+                " requires a restart.\n");
+        file_service_reconfigured = false;
+        return -1;
+    }
 
     /* check configurations */
     if (curr->file_capture_memcap != next->file_capture_memcap)
@@ -189,9 +173,31 @@ int file_sevice_config_verify(SnortConfig *old, SnortConfig *new)
         return -1;
     }
 
+    if (curr->file_capture_max_size != next->file_capture_max_size)
+    {
+        ErrorMessage("File service: Changing file capture max size"
+                " requires a restart.\n");
+        return -1;
+    }
+
     if (curr->file_capture_block_size != next->file_capture_block_size)
     {
         ErrorMessage("File service: Changing file capture block size"
+                " requires a restart.\n");
+        return -1;
+    }
+
+    /*Change depth requires restart*/
+    if (curr->file_signature_depth != next->file_signature_depth)
+    {
+        ErrorMessage("File service: Changing file signature depth"
+                " requires a restart.\n");
+        return -1;
+    }
+
+    if (curr->file_type_depth != next->file_type_depth)
+    {
+        ErrorMessage("File service: Changing file type depth"
                 " requires a restart.\n");
         return -1;
     }
@@ -258,14 +264,12 @@ static void file_service_display_conf(FileConfig *config)
             config->file_capture_min_size,
             config->file_capture_min_size == DEFAULT_FILE_CAPTURE_MIN_SIZE ?
                     "(Default) bytes" : " bytes" );
-#if defined (SIDE_CHANNEL) && defined (REG_TEST)
-    FilePrintSSConfig(config->file_ss_config);
-#endif
 
     LogMessage("\n");
 }
+
 /*The main function for parsing rule option*/
-void file_service_config(struct _SnortConfig* sc, char *args, void *conf)
+void file_service_config(char *args, void *conf)
 {
     char **toks;
     int num_toks;
@@ -283,13 +287,6 @@ void file_service_config(struct _SnortConfig* sc, char *args, void *conf)
     }
 
     file_service_config_defaults(file_config);
-#if defined (SIDE_CHANNEL) && defined (REG_TEST)
-    if (NULL == (file_config->file_ss_config = (FileSSConfig *)SnortPreprocAlloc(1, 
-            sizeof(FileSSConfig), PP_FILE, PP_MEM_CATEGORY_CONFIG)))
-      return;
-    else if(ScSideChannelEnabled())
-      file_config->use_side_channel = true;
-#endif
 
     toks = mSplit(args, ",", 0, &num_toks, 0);  /* get rule option pairs */
 
@@ -408,16 +405,6 @@ void file_service_config(struct _SnortConfig* sc, char *args, void *conf)
                 file_config->show_data_depth = FILE_SERVICE_SIG_DEPTH_MAX;
         }
 #endif
-#if defined (SIDE_CHANNEL) && defined (REG_TEST)
-        else if(!strcasecmp(opts[0], "ss_startup_input_file"))
-        {
-            file_config->file_ss_config->startup_input_file = strdup(opts[1]);
-        }
-        else if(!strcasecmp(opts[0], "ss_runtime_output_file"))
-        {
-            file_config->file_ss_config->runtime_output_file = strdup(opts[1]);
-        }
-#endif
         else
         {
             ParseError("File service: Invalid argument: %s\n",  opts[0]);
@@ -428,9 +415,9 @@ void file_service_config(struct _SnortConfig* sc, char *args, void *conf)
 
 #if defined(DEBUG_MSGS) || defined (REG_TEST)
     if (file_type_enabled)
-        file_api->enable_file_type(sc, NULL);
+        file_api->enable_file_type(NULL);
     if (file_signature_enabled)
-        file_api->enable_file_signature(sc, NULL);
+        file_api->enable_file_signature(NULL);
 #endif
     /* file capture memcap should not be larger file capture block size*/
     if (file_config->file_capture_block_size >

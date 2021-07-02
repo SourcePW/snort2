@@ -1,7 +1,6 @@
 AUTOMAKE_OPTIONS=foreign no-dependencies
 
 EXTRA_DIST = \
-sfdynamic_preproc_libs.vcxproj \
 sfdynamic_preproc_libs.dsp \
 sfparser.c \
 sfcommon.h \

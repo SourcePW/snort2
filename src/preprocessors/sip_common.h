@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
- ** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ ** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * ** Copyright (C) 2005-2013 Sourcefire, Inc.
  * ** AUTHOR: Steven Sturges
  * **
@@ -112,8 +112,8 @@ typedef SIP_MediaSession* SIP_MediaList;
 typedef struct _SipDialog
 {
     SIP_DialogState state;
-    bool          mediaUpdated;
 	SIP_MediaList mediaSessions;
+    bool          mediaUpdated;
 } SipDialog;
 
 typedef struct _SipEventData

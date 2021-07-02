@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -422,7 +422,7 @@ static int MDNS_validate(ServiceValidationArgs* args)
         ret_val = MDNS_validate_reply(data, size);
         if (ret_val == 1)
         {
-            if (appidStaticConfig->mdns_user_reporting)
+            if (appidStaticConfig.mdns_user_reporting)
             {
                 ret_val = MDNSUserAnalyser(flowp, pkt , size, args->pConfig);
                 mdnsMatchListDestroy(args->pConfig);
@@ -440,12 +440,12 @@ static int MDNS_validate(ServiceValidationArgs* args)
 
 success:
     mdns_service_mod.api->add_service(flowp, pkt, args->dir, &svc_element,
-                                      APP_ID_MDNS, NULL, NULL, NULL, NULL);
+                                      APP_ID_MDNS, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 fail:
     mdns_service_mod.api->fail_service(flowp, pkt, args->dir, &svc_element,
-                                       mdns_service_mod.flow_data_index, args->pConfig, NULL);
+                                       mdns_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 }
 

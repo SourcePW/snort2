@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2003-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -46,6 +46,7 @@
 #include "util.h"
 #else
 #include "sf_dynamic_preprocessor.h"
+#define SnortAlloc(a) calloc(1,(a))
 #endif   //DYNAMIC_PREPROC_CONTEXT
 /*
 *   Set max # bytes & init other variables.
@@ -102,7 +103,7 @@ void * sfmemcap_alloc( MEMCAP * mc, unsigned long nbytes )
    }
 
    //data = (long *) malloc( nbytes );
-   data = (long *)calloc(1, nbytes);
+   data = (long *)SnortAlloc( nbytes );
 
    if( data == NULL )
    {
@@ -140,6 +141,27 @@ void sfmemcap_showmem( MEMCAP * mc )
      fprintf(stderr, "memcap: memcap = %lu bytes,",mc->memcap);
      fprintf(stderr, " memused= %lu bytes,",mc->memused);
      fprintf(stderr, " nblocks= %d blocks\n",mc->nblocks);
+}
+
+/*
+*  String Dup Some memory.
+*/
+char * sfmemcap_strdup( MEMCAP * mc, const char *str )
+{
+    char *data = NULL;
+    int data_size;
+
+    data_size = strlen(str) + 1;
+    data = (char *)sfmemcap_alloc(mc, data_size);
+
+    if(data == NULL)
+    {
+        return  0 ;
+    }
+
+    SnortStrncpy(data, str, data_size);
+
+    return data;
 }
 
 /*

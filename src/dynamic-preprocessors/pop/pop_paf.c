@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2011-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -29,7 +29,6 @@
 #include "snort_pop.h"
 #include "pop_config.h"
 #include "file_api.h"
-#include "pop_util.h"
 
 static uint8_t pop_paf_id = 0;
 
@@ -67,8 +66,8 @@ typedef struct _PopPafParseCmd
 typedef struct _PopPafData
 {
     PopExpectedResp pop_state;   /* The current POP PAF state. */
-    DataEndState end_state;   /* Current termination sequence state */
     PopPafParseCmd cmd_state;    /* all of the command parsing data */
+    DataEndState end_state;   /* Current termination sequence state */
     MimeDataPafInfo data_info;   /* Mime Information */
     bool cmd_continued;          /* data continued from previous packet? */
     bool end_of_data;
@@ -439,8 +438,7 @@ static PAF_Status pop_paf(void* ssn, void** ps, const uint8_t* data,
         if (_dpd.fileAPI->check_paf_abort(ssn))
             return PAF_ABORT;
         
-        pfdata = _dpd.snortAlloc(1, sizeof(*pfdata), PP_POP, 0);
-        
+        pfdata = calloc(1, sizeof(*pfdata));
         if (pfdata == NULL)
         {
             return PAF_ABORT;
@@ -476,13 +474,6 @@ bool is_data_end (void* ssn)
     return false;
 }
 
-void pop_paf_cleanup(void *pafData)
-{
-   if (pafData) {
-      _dpd.snortFree(pafData, sizeof(PopPafData), PP_POP, 0);
-   }
-}
-
 #ifdef TARGET_BASED
 void register_pop_paf_service (struct _SnortConfig *sc, int16_t app, tSfPolicyId policy)
 {
@@ -490,7 +481,6 @@ void register_pop_paf_service (struct _SnortConfig *sc, int16_t app, tSfPolicyId
     {
        pop_paf_id = _dpd.streamAPI->register_paf_service(sc, policy, app, true, pop_paf, true);
        pop_paf_id = _dpd.streamAPI->register_paf_service(sc, policy, app, false,pop_paf, true);
-       _dpd.streamAPI->register_paf_free(pop_paf_id, pop_paf_cleanup);
     }
 }
 #endif
@@ -502,6 +492,5 @@ void register_pop_paf_port(struct _SnortConfig *sc, unsigned int i, tSfPolicyId 
     {
         pop_paf_id = _dpd.streamAPI->register_paf_port(sc, policy, (uint16_t)i, true, pop_paf, true);
         pop_paf_id = _dpd.streamAPI->register_paf_port(sc, policy, (uint16_t)i, false, pop_paf, true);
-	_dpd.streamAPI->register_paf_free(pop_paf_id, pop_paf_cleanup);
     }
 }

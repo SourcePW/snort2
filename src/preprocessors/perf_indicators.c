@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 **
 ** This program is free software; you can redistribute it and/or modify
 ** it under the terms of the GNU General Public License Version 2 as
@@ -39,9 +39,9 @@ static void getTicksPerMicrosec(void)
 }
 
 #ifdef PI_PACKET_LATENCY_SUPPORT
-uint32_t GetPacketLatency(void)
+static uint32_t GetPacketLatency()
 {
-    if( (latencyStats != NULL) && (latencyStats->exits != 0) )
+    if( (latencyStats != NULL) || (latencyStats->exits == 0) )
     {
         getTicksPerMicrosec();
 
@@ -57,7 +57,7 @@ uint32_t GetPacketLatency(void)
 #endif
 
 #ifdef PI_PACKET_DROPS_SUPPORT
-double GetPacketDropPortion(void)
+static double GetPacketDropPortion()
 {
     uint64_t drop, recv, sum;
     double portion;

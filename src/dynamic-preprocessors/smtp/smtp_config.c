@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2005-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -55,14 +55,14 @@
 
 
 /* Private functions */
-static int  ProcessPorts(SMTPConfig *, char *, int, char **);
-static int  ProcessCmds(SMTPConfig *, char *, int, char **, int, SMTPCmdTypeEnum);
+static int  ProcessPorts(SMTPConfig *, char *, int);
+static int ProcessCmds(SMTPConfig *, char *, int, int, SMTPCmdTypeEnum);
 static int  GetCmdId(SMTPConfig *, char *, SMTPCmdTypeEnum);
 static int  AddCmd(SMTPConfig *, char *, SMTPCmdTypeEnum);
-static int  ProcessAltMaxCmdLen(SMTPConfig *, char *, int, char **);
-static int  ProcessMaxMimeDepth(SMTPConfig *, char *, int, char **);
-static int  ProcessLogDepth(SMTPConfig *, char *, int, char **);
-static int  ProcessXlink2State(SMTPConfig *, char *, int, char **);
+static int  ProcessAltMaxCmdLen(SMTPConfig *, char *, int);
+static int  ProcessMaxMimeDepth(SMTPConfig *, char *, int);
+static int  ProcessLogDepth(SMTPConfig *, char *, int);
+static int  ProcessXlink2State(SMTPConfig *, char *, int);
 
 /*
  * Function: SMTP_ParseArgs(char *)
@@ -83,7 +83,6 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
     char *arg;
     char *value;
     char errStr[ERRSTRLEN];
-    char *saveptr;
     int errStrLen = ERRSTRLEN;
     int deprecated_options = 0;
 
@@ -107,8 +106,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
     _dpd.fileAPI->set_mime_log_config_defauts(&(config->log_config));
     config->log_config.email_hdrs_log_depth = DEFAULT_LOG_DEPTH;
 
-    config->cmd_config = (SMTPCmdConfig *)_dpd.snortAlloc(CMD_LAST, sizeof(SMTPCmdConfig), PP_SMTP,
-                                               PP_MEM_CATEGORY_CONFIG);
+    config->cmd_config = (SMTPCmdConfig *)calloc(CMD_LAST, sizeof(SMTPCmdConfig));
     if (config->cmd_config == NULL)
     {
         DynamicPreprocessorFatalMessage("%s(%d) => Failed to allocate memory for SMTP "
@@ -118,7 +116,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
 
     *errStr = '\0';
 
-    arg = strtok_r(args, CONF_SEPARATORS, &saveptr);
+    arg = strtok(args, CONF_SEPARATORS);
 
     while ( arg != NULL )
     {
@@ -126,11 +124,11 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
 
         if ( !strcasecmp(CONF_PORTS, arg) )
         {
-            ret = ProcessPorts(config, errStr, errStrLen, &saveptr);
+            ret = ProcessPorts(config, errStr, errStrLen);
         }
         else if ( !strcasecmp(CONF_INSPECTION_TYPE, arg) )
         {
-            value = strtok_r(NULL, CONF_SEPARATORS, &saveptr);
+            value = strtok(NULL, CONF_SEPARATORS);
             if ( value == NULL )
             {
                 return;
@@ -146,7 +144,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
         }
         else if ( !strcasecmp(CONF_NORMALIZE, arg) )
         {
-            value = strtok_r(NULL, CONF_SEPARATORS, &saveptr);
+            value = strtok(NULL, CONF_SEPARATORS);
             if ( value == NULL )
             {
                 return;
@@ -176,7 +174,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
         {
             char *endptr;
 
-            value = strtok_r(NULL, CONF_SEPARATORS, &saveptr);
+            value = strtok(NULL, CONF_SEPARATORS);
             if ( value == NULL )
                 return;
 
@@ -186,7 +184,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
         {
             char *endptr;
 
-            value = strtok_r(NULL, CONF_SEPARATORS, &saveptr);
+            value = strtok(NULL, CONF_SEPARATORS);
             if ( value == NULL )
                 return;
 
@@ -197,7 +195,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
         {
             char *endptr;
 
-            value = strtok_r(NULL, CONF_SEPARATORS, &saveptr);
+            value = strtok(NULL, CONF_SEPARATORS);
             if ( value == NULL )
                 return;
 
@@ -207,7 +205,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
         {
             char *endptr;
 
-            value = strtok_r(NULL, CONF_SEPARATORS, &saveptr);
+            value = strtok(NULL, CONF_SEPARATORS);
             if ( value == NULL )
                 return;
 
@@ -224,44 +222,44 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
         else if ( !strcasecmp(CONF_INVALID_CMDS, arg) )
         {
             /* Parse disallowed commands */
-            ret = ProcessCmds(config, errStr, errStrLen, &saveptr, ACTION_ALERT, SMTP_CMD_TYPE_NORMAL);
+            ret = ProcessCmds(config, errStr, errStrLen, ACTION_ALERT, SMTP_CMD_TYPE_NORMAL);
         }
         else if ( !strcasecmp(CONF_VALID_CMDS, arg) )
         {
             /* Parse allowed commands */
-            ret = ProcessCmds(config, errStr, errStrLen, &saveptr, ACTION_NO_ALERT, SMTP_CMD_TYPE_NORMAL);
+            ret = ProcessCmds(config, errStr, errStrLen, ACTION_NO_ALERT, SMTP_CMD_TYPE_NORMAL);
         }
         else if ( !strcasecmp(CONF_AUTH_CMDS, arg) )
         {
-            ret = ProcessCmds(config, errStr, errStrLen, &saveptr, ACTION_NO_ALERT, SMTP_CMD_TYPE_AUTH);
+            ret = ProcessCmds(config, errStr, errStrLen, ACTION_NO_ALERT, SMTP_CMD_TYPE_AUTH);
         }
         else if ( !strcasecmp(CONF_DATA_CMDS, arg) )
         {
-            ret = ProcessCmds(config, errStr, errStrLen, &saveptr, ACTION_NO_ALERT, SMTP_CMD_TYPE_DATA);
+            ret = ProcessCmds(config, errStr, errStrLen, ACTION_NO_ALERT, SMTP_CMD_TYPE_DATA);
         }
         else if ( !strcasecmp(CONF_BDATA_CMDS, arg) )
         {
-            ret = ProcessCmds(config, errStr, errStrLen, &saveptr, ACTION_NO_ALERT, SMTP_CMD_TYPE_BDATA);
+            ret = ProcessCmds(config, errStr, errStrLen, ACTION_NO_ALERT, SMTP_CMD_TYPE_BDATA);
         }
         else if ( !strcasecmp(CONF_NORMALIZE_CMDS, arg) )
         {
             /* Parse normalized commands */
-            ret = ProcessCmds(config, errStr, errStrLen, &saveptr, ACTION_NORMALIZE, SMTP_CMD_TYPE_NORMAL);
+            ret = ProcessCmds(config, errStr, errStrLen, ACTION_NORMALIZE, SMTP_CMD_TYPE_NORMAL);
         }
         else if ( !strcasecmp(CONF_ALT_MAX_COMMAND_LINE_LEN, arg) )
         {
             /* Parse max line len for commands */
-            ret = ProcessAltMaxCmdLen(config, errStr, errStrLen, &saveptr);
+            ret = ProcessAltMaxCmdLen(config, errStr, errStrLen);
         }
         else if ( !strcasecmp(CONF_SMTP_MEMCAP, arg) )
         {
-            ret = _dpd.checkValueInRange(strtok_r(NULL, CONF_SEPARATORS, &saveptr), CONF_SMTP_MEMCAP,
+            ret = _dpd.checkValueInRange(strtok(NULL, CONF_SEPARATORS), CONF_SMTP_MEMCAP,
                     MIN_SMTP_MEMCAP, MAX_SMTP_MEMCAP, &val);
             config->memcap = (uint32_t)val;
         }
         else if ( !strcasecmp(CONF_MAX_MIME_MEM, arg) )
         {
-            ret = _dpd.checkValueInRange(strtok_r(NULL, CONF_SEPARATORS, &saveptr), CONF_MAX_MIME_MEM,
+            ret = _dpd.checkValueInRange(strtok(NULL, CONF_SEPARATORS), CONF_MAX_MIME_MEM,
                     MIN_MIME_MEM, MAX_MIME_MEM, &val);
             config->decode_conf.max_mime_mem = (int)val;
         }
@@ -270,7 +268,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
             deprecated_options = 1;
             _dpd.logMsg("WARNING: %s(%d) => The SMTP config option 'max_mime_depth' is deprecated.\n",
                             *(_dpd.config_file), *(_dpd.config_line));
-            ret = ProcessMaxMimeDepth(config, errStr, errStrLen, &saveptr);
+            ret = ProcessMaxMimeDepth(config, errStr, errStrLen);
         }
         else if ( !strcasecmp(CONF_ENABLE_MIME_DECODING, arg) )
         {
@@ -285,7 +283,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
         }
         else if ( !strcasecmp(CONF_XLINK2STATE, arg) )
         {
-            ret = ProcessXlink2State(config, errStr, errStrLen, &saveptr);
+            ret = ProcessXlink2State(config, errStr, errStrLen);
         }
         else if ( !strcasecmp(CONF_LOG_FILENAME, arg) )
         {
@@ -305,7 +303,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
         }
         else if ( !strcasecmp(CONF_EMAIL_HDRS_LOG_DEPTH, arg) )
         {
-            ret = ProcessLogDepth(config, errStr, errStrLen, &saveptr);
+            ret = ProcessLogDepth(config, errStr, errStrLen);
         }
 
         else if ( !strcasecmp(CONF_PRINT_CMDS, arg) )
@@ -313,7 +311,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
             config->print_cmds = 1;
         }
 
-        else if(!_dpd.fileAPI->parse_mime_decode_args(&(config->decode_conf), arg, "SMTP", &saveptr))
+        else if(!_dpd.fileAPI->parse_mime_decode_args(&(config->decode_conf), arg, "SMTP"))
         {
             ret = 0;
         }
@@ -341,7 +339,7 @@ void SMTP_ParseArgs(SMTPConfig *config, char *args)
         }
 
         /*  Get next token */
-        arg = strtok_r(NULL, CONF_SEPARATORS, &saveptr);
+        arg = strtok(NULL, CONF_SEPARATORS);
     }
 
     // NOTE: the default b64_depth is not defined in this file 
@@ -696,7 +694,6 @@ void SMTP_PrintConfig(SMTPConfig *config)
 **
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -705,7 +702,7 @@ void SMTP_PrintConfig(SMTPConfig *config)
 **  @retval -1 generic fatal error
 **  @retval  1 generic non-fatal error
 */
-static int ProcessPorts(SMTPConfig *config, char *ErrorString, int ErrStrLen, char **saveptr)
+static int ProcessPorts(SMTPConfig *config, char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     char *pcEnd;
@@ -719,7 +716,7 @@ static int ProcessPorts(SMTPConfig *config, char *ErrorString, int ErrStrLen, ch
         return -1;
     }
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(!pcToken)
     {
         snprintf(ErrorString, ErrStrLen, "Invalid port list format.");
@@ -738,7 +735,7 @@ static int ProcessPorts(SMTPConfig *config, char *ErrorString, int ErrStrLen, ch
     disablePort( config->ports, SMTP_DEFAULT_SERVER_PORT );
     disablePort( config->ports, XLINK2STATE_DEFAULT_PORT );
     disablePort( config->ports, SMTP_DEFAULT_SUBMISSION_PORT );
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if(!strcmp(CONF_END_LIST, pcToken))
         {
@@ -801,7 +798,6 @@ static int ProcessPorts(SMTPConfig *config, char *ErrorString, int ErrStrLen, ch
 **
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -810,7 +806,7 @@ static int ProcessPorts(SMTPConfig *config, char *ErrorString, int ErrStrLen, ch
 **  @retval -1 generic fatal error
 */
 static int ProcessCmds(SMTPConfig *config, char *ErrorString,
-        int ErrStrLen, char **saveptr, int action, SMTPCmdTypeEnum type)
+        int ErrStrLen, int action, SMTPCmdTypeEnum type)
 {
     char *pcToken;
     int   iEndCmds = 0;
@@ -822,7 +818,7 @@ static int ProcessCmds(SMTPConfig *config, char *ErrorString,
         return -1;
     }
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if (!pcToken)
     {
         snprintf(ErrorString, ErrStrLen, "Invalid command list format.");
@@ -838,7 +834,7 @@ static int ProcessCmds(SMTPConfig *config, char *ErrorString,
         return -1;
     }
 
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if (strcmp(CONF_END_LIST, pcToken) == 0)
         {
@@ -912,8 +908,7 @@ static int AddCmd(SMTPConfig *config, char *name, SMTPCmdTypeEnum type)
     config->num_cmds++;
 
     /* allocate enough memory for new commmand - alloc one extra for NULL entry */
-    cmds = (SMTPToken *)_dpd.snortAlloc(config->num_cmds + 1, sizeof(SMTPToken), PP_SMTP,
-                             PP_MEM_CATEGORY_CONFIG);
+    cmds = (SMTPToken *)calloc(config->num_cmds + 1, sizeof(SMTPToken));
     if (cmds == NULL)
     {
         DynamicPreprocessorFatalMessage("%s(%d) => Failed to allocate memory for SMTP "
@@ -922,8 +917,7 @@ static int AddCmd(SMTPConfig *config, char *name, SMTPCmdTypeEnum type)
     }
 
     /* This gets filled in later */
-    cmd_search = (SMTPSearch *)_dpd.snortAlloc(config->num_cmds, sizeof(SMTPSearch), PP_SMTP,
-                                    PP_MEM_CATEGORY_CONFIG);
+    cmd_search = (SMTPSearch *)calloc(config->num_cmds, sizeof(SMTPSearch));
     if (cmd_search == NULL)
     {
         DynamicPreprocessorFatalMessage("%s(%d) => Failed to allocate memory for SMTP "
@@ -931,8 +925,7 @@ static int AddCmd(SMTPConfig *config, char *name, SMTPCmdTypeEnum type)
                                         *(_dpd.config_file), *(_dpd.config_line));
     }
 
-    cmd_config = (SMTPCmdConfig *)_dpd.snortAlloc(config->num_cmds, sizeof(SMTPCmdConfig), PP_SMTP,
-                                       PP_MEM_CATEGORY_CONFIG);
+    cmd_config = (SMTPCmdConfig *)calloc(config->num_cmds, sizeof(SMTPCmdConfig));
     if (cmd_config == NULL)
     {
         DynamicPreprocessorFatalMessage("%s(%d) => Failed to allocate memory for SMTP "
@@ -979,16 +972,13 @@ static int AddCmd(SMTPConfig *config, char *name, SMTPCmdTypeEnum type)
 
     /* free global memory structures */
     if (config->cmds != NULL)
-	_dpd.snortFree(config->cmds, sizeof(*(config->cmds)), PP_SMTP,
-             PP_MEM_CATEGORY_CONFIG);
+        free(config->cmds);
 
     if (config->cmd_search != NULL)
-	_dpd.snortFree(config->cmd_search, sizeof(*(config->cmd_search)), PP_SMTP,
-             PP_MEM_CATEGORY_CONFIG);
+        free(config->cmd_search);
 
     if (config->cmd_config != NULL)
-	_dpd.snortFree(config->cmd_config, sizeof(*(config->cmd_config)), PP_SMTP,
-             PP_MEM_CATEGORY_CONFIG);
+        free(config->cmd_config);
 
     /* set globals to new memory */
     config->cmds = cmds;
@@ -998,19 +988,18 @@ static int AddCmd(SMTPConfig *config, char *name, SMTPCmdTypeEnum type)
     return (config->num_cmds - 1);
 }
 
-static int ProcessMaxMimeDepth(SMTPConfig *config, char *ErrorString, int ErrStrLen, char **saveptr)
+static int ProcessMaxMimeDepth(SMTPConfig *config, char *ErrorString, int ErrStrLen)
 {
     char *endptr;
     char *value;
     int max_mime_depth = 0;
-
     if (config == NULL)
     {
         snprintf(ErrorString, ErrStrLen, "SMTP config is NULL.\n");
         return -1;
     }
 
-    value = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    value = strtok(NULL, CONF_SEPARATORS);
     if ( value == NULL )
     {
         snprintf(ErrorString, ErrStrLen,
@@ -1047,19 +1036,18 @@ static int ProcessMaxMimeDepth(SMTPConfig *config, char *ErrorString, int ErrStr
     return 0;
 }
 
-static int ProcessLogDepth(SMTPConfig *config, char *ErrorString, int ErrStrLen, char **saveptr)
+static int ProcessLogDepth(SMTPConfig *config, char *ErrorString, int ErrStrLen)
 {
     char *endptr;
     char *value;
     uint32_t log_depth = 0;
-
     if (config == NULL)
     {
         snprintf(ErrorString, ErrStrLen, "SMTP config is NULL.\n");
         return -1;
     }
 
-    value = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    value = strtok(NULL, CONF_SEPARATORS);
     if ( value == NULL )
     {
         snprintf(ErrorString, ErrStrLen,
@@ -1117,7 +1105,6 @@ static int ProcessLogDepth(SMTPConfig *config, char *ErrorString, int ErrStrLen,
 **
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -1125,7 +1112,7 @@ static int ProcessLogDepth(SMTPConfig *config, char *ErrorString, int ErrStrLen,
 **  @retval  0 successs
 **  @retval -1 generic fatal error
 */
-static int ProcessAltMaxCmdLen(SMTPConfig *config, char *ErrorString, int ErrStrLen, char **saveptr)
+static int ProcessAltMaxCmdLen(SMTPConfig *config, char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     char *pcLen;
@@ -1141,7 +1128,7 @@ static int ProcessAltMaxCmdLen(SMTPConfig *config, char *ErrorString, int ErrStr
     }
 
     /* Find number */
-    pcLen = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcLen = strtok(NULL, CONF_SEPARATORS);
     if (!pcLen)
     {
         snprintf(ErrorString, ErrStrLen,
@@ -1150,7 +1137,7 @@ static int ProcessAltMaxCmdLen(SMTPConfig *config, char *ErrorString, int ErrStr
         return -1;
     }
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if (!pcToken)
     {
         snprintf(ErrorString, ErrStrLen,
@@ -1177,7 +1164,7 @@ static int ProcessAltMaxCmdLen(SMTPConfig *config, char *ErrorString, int ErrStr
         return -1;
     }
 
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if (strcmp(CONF_END_LIST, pcToken) == 0)
         {
@@ -1219,7 +1206,7 @@ static int ProcessAltMaxCmdLen(SMTPConfig *config, char *ErrorString, int ErrStr
 **  @retval  0 successs
 **  @retval -1 generic fatal error
 */
-static int ProcessXlink2State(SMTPConfig *config, char *ErrorString, int ErrStrLen, char **saveptr)
+static int ProcessXlink2State(SMTPConfig *config, char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     int  iEnd = 0;
@@ -1230,7 +1217,7 @@ static int ProcessXlink2State(SMTPConfig *config, char *ErrorString, int ErrStrL
         return -1;
     }
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(!pcToken)
     {
         snprintf(ErrorString, ErrStrLen,
@@ -1248,7 +1235,7 @@ static int ProcessXlink2State(SMTPConfig *config, char *ErrorString, int ErrStrL
         return -1;
     }
 
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if(!strcmp(CONF_END_LIST, pcToken))
         {

@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 **
 ** This program is free software; you can redistribute it and/or modify
 ** it under the terms of the GNU General Public License Version 2 as
@@ -84,15 +84,7 @@ int PerfIndicator_RegisterPreprocStat( PreprocStats *Stats,
 
 int PerfIndicator_GetIndicators( Perf_Indicator_Descriptor_p_t PI_List );
 
-#ifdef PI_PACKET_LATENCY_SUPPORT
-uint32_t GetPacketLatency(void);
-#endif
-
-#ifdef PI_PACKET_DROPS_SUPPORT
-double GetPacketDropPortion(void);
-#endif
-
-static inline Perf_Indicator_Descriptor_p_t PerfIndicator_NewDescriptor(void)
+static inline Perf_Indicator_Descriptor_p_t PerfIndicator_NewDescriptor()
 {
     /* Caller must check for NULL */
     return( (Perf_Indicator_Descriptor_p_t)calloc(sizeof(Perf_Indicator_Descriptor_t), sizeof(char)));

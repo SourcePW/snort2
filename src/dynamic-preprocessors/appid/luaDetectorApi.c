@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -51,7 +51,6 @@
 #include "detector_dns.h"
 #include "app_forecast.h"
 #include "detector_pattern.h"
-#include "detector_cip.h"
 
 #define DETECTOR "Detector"
 #define OVECCOUNT 30    /* should be a multiple of 3 */
@@ -67,7 +66,6 @@ typedef enum {
 } LUA_LOG_LEVELS;
 
 /*static const char * LuaLogLabel = "luaDetectorApi"; */
-static ThrottleInfo error_throttleInfo = {0,30,0};
 
 #ifdef PERF_PROFILING
 PreprocStats luaDetectorsPerfStats;
@@ -158,7 +156,6 @@ Detector *createDetector(
     }
 
     detector->myLuaState = L;
-    pthread_mutex_init(&detector->luaReloadMutex, NULL);
 
     return detector;
 }
@@ -228,11 +225,6 @@ void freeDetector(Detector *detector)
         detector->detectorUserDataRef = LUA_REFNIL;
     }
 
-    if (detector->callbackFcnName)
-    {
-        free(detector->callbackFcnName);
-    }
-
     free(detector->name);
     free(detector->validatorBuffer);
 
@@ -240,185 +232,6 @@ void freeDetector(Detector *detector)
     _dpd.debugMsg(DEBUG_LOG,"Detector %p: freed\n\n",detector);
 #endif
     free(detector);
-}
-
-int detector_Callback(
-        const uint8_t *data,
-        uint16_t size,
-        const int dir,
-        tAppIdData *flowp,
-        const SFSnortPacket *pkt,
-        Detector *detector,
-        const tAppIdConfig *pConfig
-        )
-{
-    int retValue;
-    lua_State *myLuaState;
-    char *callbackFn;
-    char *detectorName;
-    PROFILE_VARS;
-#ifdef PERF_PROFILING
-    PreprocStats *pPerfStats1;
-    PreprocStats *pPerfStats2;
-#endif
-
-    if (!data || !flowp || !pkt || !detector)
-    {
-        return -10;
-    }
-
-#ifdef PERF_PROFILING
-    if (detector->isCustom)
-        pPerfStats1 = &luaCustomPerfStats;
-    else
-        pPerfStats1 = &luaCiscoPerfStats;
-    pPerfStats2 = detector->pPerfStats;
-#endif
-    PREPROC_PROFILE_START(luaDetectorsPerfStats);
-    PREPROC_PROFILE_START((*pPerfStats1));
-    PREPROC_PROFILE_START((*pPerfStats2));
-
-    myLuaState = detector->myLuaState;
-    detector->validateParams.data = data;
-    detector->validateParams.size = size;
-    detector->validateParams.dir = dir;
-    detector->validateParams.flowp = flowp;
-    detector->validateParams.pkt = (SFSnortPacket *)pkt;
-    callbackFn = detector->callbackFcnName;
-    detectorName = detector->name;
-
-    /* Bail out if we cannot acquire the lock on the detector.
-       To avoid bailing out, use recursive mutex instead. */
-    if( pthread_mutex_trylock(&detector->luaReloadMutex))
-    {
-        detector->validateParams.pkt = NULL;
-        PREPROC_PROFILE_END((*pPerfStats2));
-        PREPROC_PROFILE_END((*pPerfStats1));
-        PREPROC_PROFILE_END(luaDetectorsPerfStats);
-        return -11;
-    }
-
-    if ((!callbackFn) || !(lua_checkstack(myLuaState, 1)))
-    {
-        _dpd.errMsgThrottled(&error_throttleInfo,
-                             "Detector %s: invalid LUA %s\n", 
-                             detectorName, lua_tostring(myLuaState, -1));
-        detector->validateParams.pkt = NULL;
-        pthread_mutex_unlock(&detector->luaReloadMutex);
-        PREPROC_PROFILE_END((*pPerfStats2));
-        PREPROC_PROFILE_END((*pPerfStats1));
-        PREPROC_PROFILE_END(luaDetectorsPerfStats);
-        return -10;
-    }
-
-    lua_getglobal(myLuaState, callbackFn);
-
-#ifdef LUA_DETECTOR_DEBUG
-    _dpd.debugMsg(DEBUG_LOG,"Detector %s: Lua Memory usage %d\n", detectorName, lua_gc(myLuaState, LUA_GCCOUNT,0));
-    _dpd.debugMsg(DEBUG_LOG,"Detector %s: validating\n", detectorName);
-#endif
-    if (lua_pcall(myLuaState, 0, 1, 0 ))
-    {
-        _dpd.errMsg("Detector %s: Error validating %s\n", detectorName, lua_tostring(myLuaState, -1));
-        detector->validateParams.pkt = NULL;
-        pthread_mutex_unlock(&detector->luaReloadMutex);
-        PREPROC_PROFILE_END((*pPerfStats2));
-        PREPROC_PROFILE_END((*pPerfStats1));
-        PREPROC_PROFILE_END(luaDetectorsPerfStats);
-        return -10;
-    }
-
-    /**detectorFlows must be destroyed after each packet is processed.*/
-    sflist_static_free_all(&allocatedFlowList, freeDetectorFlow);
-
-    /* retrieve result */
-    if (!lua_isnumber(myLuaState, -1))
-    {
-        _dpd.errMsg("Detector %s: Validator returned non-numeric value\n", detectorName);
-        detector->validateParams.pkt = NULL;
-        pthread_mutex_unlock(&detector->luaReloadMutex);
-        PREPROC_PROFILE_END((*pPerfStats2));
-        PREPROC_PROFILE_END((*pPerfStats1));
-        PREPROC_PROFILE_END(luaDetectorsPerfStats);
-        retValue = -10;
-    }
-
-    retValue = lua_tonumber(myLuaState, -1);
-    lua_pop(myLuaState, 1);  /* pop returned value */
-    /*lua_settop(myLuaState, 0); */
-
-#ifdef LUA_DETECTOR_DEBUG
-    _dpd.debugMsg(DEBUG_LOG,"Detector %s: Validator returned %d\n", detectorName, retValue);
-#endif
-
-    detector->validateParams.pkt = NULL;
-
-    pthread_mutex_unlock(&detector->luaReloadMutex);
-    PREPROC_PROFILE_END((*pPerfStats2));
-    PREPROC_PROFILE_END((*pPerfStats1));
-    PREPROC_PROFILE_END(luaDetectorsPerfStats);
-
-    return retValue;
-}
-
-static int Detector_registerClientCallback(lua_State *L)
-{
-    tAppId appId;
-    const char *callback;
-    Detector *detector;
-    int index = 1;
-
-    DetectorUserData *detectorUserData = checkDetectorUserData(L, index++);
-    appId = lua_tonumber(L, index++);
-    callback = lua_tostring(L, index++);
-
-    if (!detectorUserData || !callback)
-    {
-        lua_pushnumber(L, -1);
-        return 1;   /*number of results */
-    }
-
-    detector = detectorUserData->pDetector;
-
-    if (!(detector->callbackFcnName = strdup(callback)))
-    {
-        lua_pushnumber(L, -1);
-        return 1;
-    }
-    appSetClientDetectorCallback(detector_Callback, appId, detector, detector->pAppidNewConfig);
-
-    lua_pushnumber(L, 0);
-    return 1;
-}
-
-static int Detector_registerServiceCallback(lua_State *L)
-{
-    tAppId appId;
-    const char *callback;
-    Detector *detector;
-    int index = 1;
-
-    DetectorUserData *detectorUserData = checkDetectorUserData(L, index++);
-    appId = lua_tonumber(L, index++);
-    callback = lua_tostring(L, index++);
-
-    if (!detectorUserData || !callback)
-    {
-        lua_pushnumber(L, -1);
-        return 1;   /*number of results */
-    }
-
-    detector = detectorUserData->pDetector;
-
-    if (!(detector->callbackFcnName = strdup(callback)))
-    {
-        lua_pushnumber(L, -1);
-        return 1;
-    }
-    appSetServiceDetectorCallback(detector_Callback, appId, detector, detector->pAppidNewConfig);
-
-    lua_pushnumber(L, 0);
-    return 1;
 }
 
 /*converts Luastring to C compatible string. */
@@ -782,14 +595,10 @@ int validateAnyService(ServiceValidationArgs *args)
     /*Note: Some frequently used header fields may be extracted and stored in detector for */
     /*better performance. */
 
-    pthread_mutex_lock(&detector->luaReloadMutex);
     if ((!detector->packageInfo.server.validateFunctionName) || !(lua_checkstack(myLuaState, 1)))
     {
-        _dpd.errMsgThrottled(&error_throttleInfo,
-                             "server %s: invalid LUA %s\n",
-                             serverName, lua_tostring(myLuaState, -1));
+        _dpd.errMsg("server %s: invalid LUA %s\n",serverName, lua_tostring(myLuaState, -1));
         detector->validateParams.pkt = NULL;
-        pthread_mutex_unlock(&detector->luaReloadMutex);
         PREPROC_PROFILE_END((*pPerfStats2));
         PREPROC_PROFILE_END((*pPerfStats1));
         PREPROC_PROFILE_END((luaDetectorsPerfStats));
@@ -809,7 +618,6 @@ int validateAnyService(ServiceValidationArgs *args)
         /*by other detectors or future packets by the same detector. */
         _dpd.errMsg("server %s: error validating %s\n",serverName, lua_tostring(myLuaState, -1));
         detector->validateParams.pkt = NULL;
-        pthread_mutex_unlock(&detector->luaReloadMutex);
         PREPROC_PROFILE_END((*pPerfStats2));
         PREPROC_PROFILE_END((*pPerfStats1));
         PREPROC_PROFILE_END(luaDetectorsPerfStats);
@@ -824,7 +632,6 @@ int validateAnyService(ServiceValidationArgs *args)
     {
         _dpd.errMsg("server %s:  validator returned non-numeric value\n",serverName);
         detector->validateParams.pkt = NULL;
-        pthread_mutex_unlock(&detector->luaReloadMutex);
         PREPROC_PROFILE_END((*pPerfStats2));
         PREPROC_PROFILE_END((*pPerfStats1));
         PREPROC_PROFILE_END(luaDetectorsPerfStats);
@@ -840,7 +647,6 @@ int validateAnyService(ServiceValidationArgs *args)
 #endif
 
     detector->validateParams.pkt = NULL;
-    pthread_mutex_unlock(&detector->luaReloadMutex);
 
     PREPROC_PROFILE_END((*pPerfStats2));
     PREPROC_PROFILE_END((*pPerfStats1));
@@ -1194,7 +1000,7 @@ static int service_addService(
     /*Subtype is not displayed on DC at present. */
     retValue = AppIdServiceAddService(detector->validateParams.flowp, detector->validateParams.pkt,
             detector->validateParams.dir, detector->server.pServiceElement,
-            appGetAppFromServiceId(serviceId, detector->pAppidActiveConfig), vendor, version, NULL, NULL);
+            appGetAppFromServiceId(serviceId, detector->pAppidActiveConfig), vendor, version, NULL);
 
     lua_pushnumber(L, retValue);
     return 1;
@@ -1227,7 +1033,7 @@ static int service_failService(
     detector = detectorUserData->pDetector;
 
     retValue = AppIdServiceFailService(detector->validateParams.flowp, detector->validateParams.pkt,
-                                       detector->validateParams.dir, detector->server.pServiceElement, APPID_SESSION_DATA_NONE, detector->pAppidActiveConfig, NULL);
+                                       detector->validateParams.dir, detector->server.pServiceElement, APPID_SESSION_DATA_NONE, detector->pAppidActiveConfig);
 
     lua_pushnumber(L, retValue);
     return 1;
@@ -1261,7 +1067,7 @@ static int service_inProcessService(
     detector = detectorUserData->pDetector;
 
     retValue = AppIdServiceInProcess(detector->validateParams.flowp, detector->validateParams.pkt,
-                                     detector->validateParams.dir, detector->server.pServiceElement, NULL);
+                                     detector->validateParams.dir, detector->server.pServiceElement);
 
     lua_pushnumber(L, retValue);
     return 1;
@@ -1295,7 +1101,7 @@ static int service_inCompatibleData(
 
     retValue = AppIdServiceIncompatibleData(detector->validateParams.flowp, detector->validateParams.pkt,
                                             detector->validateParams.dir, detector->server.pServiceElement,
-                                            APPID_SESSION_DATA_NONE, detector->pAppidActiveConfig, NULL);
+                                            APPID_SESSION_DATA_NONE, detector->pAppidActiveConfig);
 
     lua_pushnumber(L, retValue);
     return 1;
@@ -1703,14 +1509,10 @@ int validateAnyClientApp(
     validateFn = detector->packageInfo.client.validateFunctionName;
     clientName = detector->name;
 
-    pthread_mutex_lock(&detector->luaReloadMutex);
     if ((!validateFn) || !(lua_checkstack(myLuaState, 1)))
     {
-        _dpd.errMsgThrottled(&error_throttleInfo,
-                            "client %s: invalid LUA %s\n",
-                           clientName, lua_tostring(myLuaState, -1));
+        _dpd.errMsg("client %s: invalid LUA %s\n",clientName, lua_tostring(myLuaState, -1));
         detector->validateParams.pkt = NULL;
-        pthread_mutex_unlock(&detector->luaReloadMutex);
         PREPROC_PROFILE_END((*pPerfStats2));
         PREPROC_PROFILE_END((*pPerfStats1));
         PREPROC_PROFILE_END(luaDetectorsPerfStats);
@@ -1727,7 +1529,6 @@ int validateAnyClientApp(
     {
         _dpd.errMsg("client %s: error validating %s\n",clientName, lua_tostring(myLuaState, -1));
         detector->validateParams.pkt = NULL;
-        pthread_mutex_unlock(&detector->luaReloadMutex);
         PREPROC_PROFILE_END((*pPerfStats2));
         PREPROC_PROFILE_END((*pPerfStats1));
         PREPROC_PROFILE_END(luaDetectorsPerfStats);
@@ -1742,7 +1543,6 @@ int validateAnyClientApp(
     {
         _dpd.errMsg("client %s:  validator returned non-numeric value\n",clientName);
         detector->validateParams.pkt = NULL;
-        pthread_mutex_unlock(&detector->luaReloadMutex);
         PREPROC_PROFILE_END((*pPerfStats2));
         PREPROC_PROFILE_END((*pPerfStats1));
         PREPROC_PROFILE_END(luaDetectorsPerfStats);
@@ -1758,9 +1558,8 @@ int validateAnyClientApp(
 #endif
 
     detector->validateParams.pkt = NULL;
-    pthread_mutex_unlock(&detector->luaReloadMutex);
 
-    PREPROC_PROFILE_END((*pPerfStats2));
+        PREPROC_PROFILE_END((*pPerfStats2));
     PREPROC_PROFILE_END((*pPerfStats1));
     PREPROC_PROFILE_END(luaDetectorsPerfStats);
     return retValue;
@@ -1841,7 +1640,7 @@ static int service_addClient (lua_State *L)
 
     detector = detectorUserData->pDetector;
 
-    AppIdAddClientApp(detector->validateParams.pkt, detector->validateParams.dir, detector->pAppidActiveConfig, detector->validateParams.flowp, serviceId, clientAppId, version);
+    AppIdAddClientApp(detector->validateParams.flowp, serviceId, clientAppId, version);
 
     lua_pushnumber(L, 0);
     return 1;
@@ -1877,8 +1676,8 @@ static int client_addApp(
         return 1;
     }
 
-    detector->client.appModule.api->add_app(detector->validateParams.pkt, (APPID_SESSION_DIRECTION) detector->validateParams.dir, detector->pAppidActiveConfig,
-		    detector->validateParams.flowp, appGetAppFromServiceId(serviceId, detector->pAppidActiveConfig), appGetAppFromClientId(productId, detector->pAppidActiveConfig), version);
+    detector->client.appModule.api->add_app(detector->validateParams.flowp,
+             appGetAppFromServiceId(serviceId, detector->pAppidActiveConfig), appGetAppFromClientId(productId, detector->pAppidActiveConfig), version);
 
     lua_pushnumber(L, 0);
     return 1;
@@ -2314,61 +2113,6 @@ static int Detector_addHostPortApp (lua_State *L)
     unsigned proto  = lua_tointeger(L, index++);
 
     if (!hostPortAppCacheAdd(&ip6Addr, (uint16_t)port, (uint16_t)proto, type, app_id, detectorUserData->pDetector->pAppidNewConfig))
-    {
-        _dpd.errMsg("%s:Failed to backend call\n",__func__);
-    }
-
-    return 0;
-}
-
-static int Detector_addHostPortAppDynamic (lua_State *L)
-{
-    /*uint8_t *ipaddr_str; */
-    size_t ipaddr_size;
-    int index = 1;
-    uint8_t type;
-    tAppId app_id;
-    struct in6_addr ip6Addr;
-
-    DetectorUserData *detectorUserData = checkDetectorUserData(L, index++);
-    if (!detectorUserData)
-    {
-        _dpd.errMsg("%s: Invalid detector user data.\n",__func__);
-        return 0;
-    }
-
-    type = lua_tointeger(L, index++);
-    app_id  = (tAppId) lua_tointeger(L, index++);
-
-    ipaddr_size = 0;
-    const char *tmpString = lua_tolstring(L, index++, &ipaddr_size);
-    if (!tmpString || !ipaddr_size)
-    {
-        _dpd.errMsg("%s:Invalid ipaddr string\n",__func__);
-        return 0;
-    }
-    if (!strchr(tmpString, ':'))
-    {
-        if (inet_pton(AF_INET, tmpString, &ip6Addr.s6_addr32[3]) <= 0)
-        {
-            _dpd.errMsg("%s: Invalid IP address: %s\n",__func__, tmpString);
-            return 0;
-        }
-        ip6Addr.s6_addr32[0] = ip6Addr.s6_addr32[1] =  0;
-        ip6Addr.s6_addr32[2] = ntohl(0x0000ffff);
-    }
-    else
-    {
-        if (inet_pton(AF_INET6, tmpString, &ip6Addr) <= 0)
-        {
-            _dpd.errMsg("%s: Invalid IP address: %s\n",__func__, tmpString);
-            return 0;
-        }
-    }
-    unsigned port  = lua_tointeger(L, index++);
-    unsigned proto  = lua_tointeger(L, index++);
-
-    if (!hostPortAppCacheDynamicAdd(&ip6Addr, (uint16_t)port, (uint16_t)proto, type, app_id, true))
     {
         _dpd.errMsg("%s:Failed to backend call\n",__func__);
     }
@@ -3046,14 +2790,14 @@ static int Detector_addAppUrl(lua_State *L)
     }
 
     u_int32_t service_id      = lua_tointeger(L, index++);
-    u_int32_t client_id      = lua_tointeger(L, index++);
-    lua_tointeger(L, index++); // client_app_type
-    u_int32_t payload_id         = lua_tointeger(L, index++);
-    lua_tointeger(L, index++); // payload_type
+    u_int32_t client_app      = lua_tointeger(L, index++);
+    /*u_int32_t client_app_type =*/ lua_tointeger(L, index++);
+    u_int32_t payload         = lua_tointeger(L, index++);
+    /*u_int32_t payload_type    =*/ lua_tointeger(L, index++);
 
     if (detectorUserData->pDetector->validateParams.pkt)
     {
-        _dpd.errMsg("Invalid HTTP detector context addAppUrl: service_id %u; client_id %u; payload_id %u\n",service_id, client_id, payload_id);
+        _dpd.errMsg("Invalid HTTP detector context addAppUrl: service_id %u; client_app %u; payload %u\n",service_id, client_app, payload);
         return 0;
     }
 
@@ -3061,14 +2805,9 @@ static int Detector_addAppUrl(lua_State *L)
     size_t hostPatternSize = 0;
     u_int8_t* hostPattern = NULL;
     tmpString = lua_tolstring(L, index++, &hostPatternSize);
-    if(!tmpString || !hostPatternSize)
+    if(!tmpString || !hostPatternSize || !(hostPattern = (u_int8_t *)strdup(tmpString)))
     {
-        _dpd.errMsg( "Invalid host pattern string:service_id %u; client_id %u; payload_id %u\n.",service_id, client_id, payload_id);
-        return 0;
-    }
-    else if (!(hostPattern = (u_int8_t *)strdup(tmpString)))
-    {
-        _dpd.errMsg( "Failed to duplicate host pattern: %s, service_id %u; client_id %u; payload_id %u\n.",tmpString, service_id, client_id, payload_id);
+        _dpd.errMsg( "Invalid host pattern string.");
         return 0;
     }
 
@@ -3076,15 +2815,9 @@ static int Detector_addAppUrl(lua_State *L)
     size_t pathPatternSize = 0;
     u_int8_t* pathPattern = NULL;
     tmpString = lua_tolstring(L, index++, &pathPatternSize);
-    if(!tmpString || !pathPatternSize)
+    if(!tmpString || !pathPatternSize || !(pathPattern = (u_int8_t *)strdup(tmpString)))
     {
-        _dpd.errMsg( "Invalid path pattern string: service_id %u; client_id %u; payload_id %u\n.",service_id, client_id, payload_id);
-        free(hostPattern);
-        return 0;
-    }
-    else if (!(pathPattern = (u_int8_t *)strdup(tmpString)))
-    {
-        _dpd.errMsg( "Failed to duplicate path pattern: %s, service_id %u; client_id %u; payload_id %u\n.",tmpString, service_id, client_id, payload_id);
+        _dpd.errMsg( "Invalid path pattern string.");
         free(hostPattern);
         return 0;
     }
@@ -3093,16 +2826,9 @@ static int Detector_addAppUrl(lua_State *L)
     size_t schemePatternSize;
     u_int8_t* schemePattern = NULL;
     tmpString = lua_tolstring(L, index++, &schemePatternSize);
-    if(!tmpString || !schemePatternSize)
+    if(!tmpString || !schemePatternSize || !(schemePattern = (u_int8_t*) strdup(tmpString)))
     {
-        _dpd.errMsg( "Invalid scheme pattern string: service_id %u; client_id %u; payload_id %u\n.",service_id, client_id, payload_id);
-        free(pathPattern);
-        free(hostPattern);
-        return 0;
-    }
-    else if (!(schemePattern = (u_int8_t*) strdup(tmpString)))
-    {
-        _dpd.errMsg( "Failed to duplicate scheme pattern: %s, service_id %u; client_id %u; payload_id %u\n.",tmpString, service_id, client_id, payload_id);
+        _dpd.errMsg( "Invalid scheme pattern string.");
         free(pathPattern);
         free(hostPattern);
         return 0;
@@ -3141,8 +2867,8 @@ static int Detector_addAppUrl(lua_State *L)
     tAppIdConfig       *pConfig = detectorUserData->pDetector->pAppidNewConfig;
 
     pattern->userData.service_id        = appGetAppFromServiceId(service_id, pConfig);
-    pattern->userData.client_app        = appGetAppFromClientId(client_id, pConfig);
-    pattern->userData.payload           = appGetAppFromPayloadId(payload_id, pConfig);
+    pattern->userData.client_app        = appGetAppFromClientId(client_app, pConfig);
+    pattern->userData.payload           = appGetAppFromPayloadId(payload, pConfig);
     pattern->userData.appId             = appId;
     pattern->userData.query.pattern     = queryPattern;
     pattern->userData.query.patternSize = queryPatternSize;
@@ -3196,14 +2922,14 @@ static int Detector_addRTMPUrl(lua_State *L)
     }
 
     u_int32_t service_id      = lua_tointeger(L, index++);
-    u_int32_t client_id      = lua_tointeger(L, index++);
-    lua_tointeger(L, index++); // client_app_type 
-    u_int32_t payload_id         = lua_tointeger(L, index++);
-    lua_tointeger(L, index++); // payload_type
+    u_int32_t client_app      = lua_tointeger(L, index++);
+    /*u_int32_t client_app_type =*/ lua_tointeger(L, index++);
+    u_int32_t payload         = lua_tointeger(L, index++);
+    /*u_int32_t payload_type    =*/ lua_tointeger(L, index++);
 
     if (detectorUserData->pDetector->validateParams.pkt)
     {
-        _dpd.errMsg("Invalid HTTP detector context addRTMPUrl: service_id %u; client_id %u; payload_id %u\n",service_id, client_id, payload_id);
+        _dpd.errMsg("Invalid HTTP detector context addRTMPUrl: service_id %u; client_app %u; payload %u\n",service_id, client_app, payload);
         return 0;
     }
 
@@ -3211,14 +2937,9 @@ static int Detector_addRTMPUrl(lua_State *L)
     size_t hostPatternSize = 0;
     u_int8_t* hostPattern = NULL;
     tmpString = lua_tolstring(L, index++, &hostPatternSize);
-    if(!tmpString || !hostPatternSize) 
+    if(!tmpString || !hostPatternSize || !(hostPattern = (u_int8_t *)strdup(tmpString)))
     {
-        _dpd.errMsg( "Invalid host pattern string:service_id %u; client_id %u; payload_id %u\n",service_id, client_id, payload_id);
-        return 0;
-    }
-    else if (!(hostPattern = (u_int8_t *)strdup(tmpString)))
-    {
-        _dpd.errMsg( "Failed to duplicate host pattern: %s, service_id %u; client_id %u; payload_id %u\n.",tmpString, service_id, client_id, payload_id);
+        _dpd.errMsg( "Invalid host pattern string.");
         return 0;
     }
 
@@ -3226,15 +2947,9 @@ static int Detector_addRTMPUrl(lua_State *L)
     size_t pathPatternSize = 0;
     u_int8_t* pathPattern = NULL;
     tmpString = lua_tolstring(L, index++, &pathPatternSize);
-    if(!tmpString || !pathPatternSize)
+    if(!tmpString || !pathPatternSize || !(pathPattern = (u_int8_t *)strdup(tmpString)))
     {
-        _dpd.errMsg( "Invalid path pattern string: service_id %u; client_id %u; payload_id %u\n.",service_id, client_id, payload_id);
-        free(hostPattern);
-        return 0;
-    }
-    else if (!(pathPattern = (u_int8_t *)strdup(tmpString)))
-    {
-        _dpd.errMsg( "Failed to duplicate path pattern: %s, service_id %u; client_id %u; payload_id %u\n.",tmpString, service_id, client_id, payload_id);
+        _dpd.errMsg( "Invalid path pattern string.");
         free(hostPattern);
         return 0;
     }
@@ -3243,16 +2958,9 @@ static int Detector_addRTMPUrl(lua_State *L)
     size_t schemePatternSize;
     u_int8_t* schemePattern = NULL;
     tmpString = lua_tolstring(L, index++, &schemePatternSize);
-    if(!tmpString || !schemePatternSize) 
+    if(!tmpString || !schemePatternSize || !(schemePattern = (u_int8_t *)strdup(tmpString)))
     {
-        _dpd.errMsg( "Invalid scheme pattern string: service_id %u; client_id %u; payload_id %u\n",service_id, client_id, payload_id);
-        free(pathPattern);
-        free(hostPattern);
-        return 0;
-    }
-    else if (!(schemePattern = (u_int8_t*) strdup(tmpString)))
-    {
-        _dpd.errMsg( "Failed to duplicate scheme pattern: %s, service_id %u; client_id %u; payload_id %u\n.",tmpString, service_id, client_id, payload_id);
+        _dpd.errMsg( "Invalid scheme pattern string.");
         free(pathPattern);
         free(hostPattern);
         return 0;
@@ -3291,8 +2999,8 @@ static int Detector_addRTMPUrl(lua_State *L)
     /* we want to put these patterns in just like for regular Urls, but we do NOT need legacy IDs for them.
      * so just use the appID for service, client, or payload ID */
     pattern->userData.service_id        = service_id;
-    pattern->userData.client_app        = client_id;
-    pattern->userData.payload           = payload_id;
+    pattern->userData.client_app        = client_app;
+    pattern->userData.payload           = payload;
     pattern->userData.appId             = appId;
     pattern->userData.query.pattern     = queryPattern;
     pattern->userData.query.patternSize = queryPatternSize;
@@ -3436,7 +3144,7 @@ static int openAddClientApp(
         return 1;
     }
 
-    detector->client.appModule.api->add_app(detector->validateParams.pkt, (APPID_SESSION_DIRECTION) detector->validateParams.dir, detector->pAppidActiveConfig, detector->validateParams.flowp, serviceAppId, clientAppId, "");
+    detector->client.appModule.api->add_app(detector->validateParams.flowp, serviceAppId, clientAppId, "");
 
     lua_pushnumber(L, 0);
     return 1;
@@ -3475,7 +3183,7 @@ static int openAddServiceApp(
     /*Subtype is not displayed on DC at present. */
     retValue = AppIdServiceAddService(detector->validateParams.flowp, detector->validateParams.pkt,
             detector->validateParams.dir, detector->server.pServiceElement,
-            serviceId, NULL, NULL, NULL, NULL);
+            serviceId, NULL, NULL, NULL);
 
     lua_pushnumber(L, retValue);
     return 1;
@@ -3621,13 +3329,13 @@ static int openAddUrlPattern(lua_State *L)
     }
 
     tAppIdConfig *pConfig = detectorUserData->pDetector->pAppidNewConfig;
-    u_int32_t service_id	= lua_tointeger(L, index++);
-    u_int32_t client_id      	= lua_tointeger(L, index++);
-    u_int32_t payload_id        = lua_tointeger(L, index++);
+    u_int32_t serviceAppId      = lua_tointeger(L, index++);
+    u_int32_t clientAppId      = lua_tointeger(L, index++);
+    u_int32_t payloadAppId         = lua_tointeger(L, index++);
 
     if (detectorUserData->pDetector->validateParams.pkt)
     {
-        _dpd.errMsg("Invalid HTTP detector context addAppUrl: service_id %u; client_id %u; payload_id %u\n",service_id, client_id, payload_id);
+        _dpd.errMsg("Invalid HTTP detector context addAppUrl: serviceAppId %u; clientAppId %u; payloadAppId %u\n",serviceAppId, clientAppId, payloadAppId);
         return 0;
     }
 
@@ -3635,14 +3343,9 @@ static int openAddUrlPattern(lua_State *L)
     size_t hostPatternSize = 0;
     u_int8_t* hostPattern = NULL;
     tmpString = lua_tolstring(L, index++, &hostPatternSize);
-    if(!tmpString || !hostPatternSize)
+    if(!tmpString || !hostPatternSize || !(hostPattern = (u_int8_t *)strdup(tmpString)))
     {
-        _dpd.errMsg( "Invalid host pattern string: service_id %u; client_id %u; payload_id %u\n",service_id, client_id, payload_id);
-        return 0;
-    }
-    else if (!(hostPattern = (u_int8_t *)strdup(tmpString)))
-    {
-        _dpd.errMsg( "Failed to duplicate host pattern: %s, service_id %u; client_id %u; payload_id %u\n.",tmpString, service_id, client_id, payload_id);
+        _dpd.errMsg( "Invalid host pattern string.");
         return 0;
     }
 
@@ -3650,15 +3353,9 @@ static int openAddUrlPattern(lua_State *L)
     size_t pathPatternSize = 0;
     u_int8_t* pathPattern = NULL;
     tmpString = lua_tolstring(L, index++, &pathPatternSize);
-    if(!tmpString || !pathPatternSize)
+    if(!tmpString || !pathPatternSize || !(pathPattern = (u_int8_t *)strdup(tmpString)))
     {
-        _dpd.errMsg( "Invalid path pattern string: service_id %u; client_id %u; payload %u\n.",service_id, client_id, payload_id);
-        free(hostPattern);
-        return 0;
-    }
-    else if (!(pathPattern = (u_int8_t *)strdup(tmpString)))
-    {
-        _dpd.errMsg( "Failed to duplicate path pattern: %s, service_id %u; client_id %u; payload %u\n.",tmpString, service_id, client_id, payload_id);
+        _dpd.errMsg( "Invalid path pattern string.");
         free(hostPattern);
         return 0;
     }
@@ -3667,16 +3364,9 @@ static int openAddUrlPattern(lua_State *L)
     size_t schemePatternSize;
     u_int8_t* schemePattern = NULL;
     tmpString = lua_tolstring(L, index++, &schemePatternSize);
-    if(!tmpString || !schemePatternSize) 
+    if(!tmpString || !schemePatternSize || !(schemePattern = (u_int8_t*) strdup(tmpString)))
     {
-        _dpd.errMsg( "Invalid scheme pattern string: service_id %u; client_id %u; payload_id %u\n",service_id, client_id, payload_id);
-        free(pathPattern);
-        free(hostPattern);
-        return 0;
-    }
-    else if (!(schemePattern = (u_int8_t*) strdup(tmpString)))
-    {
-        _dpd.errMsg( "Failed to duplicate scheme pattern: %s, service_id %u; client_id %u; payload_id %u\n.",tmpString, service_id, client_id, payload_id);
+        _dpd.errMsg( "Invalid scheme pattern string.");
         free(pathPattern);
         free(hostPattern);
         return 0;
@@ -3694,9 +3384,9 @@ static int openAddUrlPattern(lua_State *L)
     }
 
 
-    pattern->userData.service_id        = service_id;
-    pattern->userData.client_app        = client_id;
-    pattern->userData.payload           = payload_id;
+    pattern->userData.service_id        = serviceAppId;
+    pattern->userData.client_app        = clientAppId;
+    pattern->userData.payload           = payloadAppId;
     pattern->userData.appId             = APP_ID_NONE;
     pattern->userData.query.pattern     = NULL;
     pattern->userData.query.patternSize = 0;
@@ -3727,9 +3417,9 @@ static int openAddUrlPattern(lua_State *L)
 
     urlList->urlPattern[urlList->usedCount++] = pattern;
 
-    appInfoSetActive(service_id, true);
-    appInfoSetActive(client_id, true);
-    appInfoSetActive(payload_id, true);
+    appInfoSetActive(serviceAppId, true);
+    appInfoSetActive(clientAppId, true);
+    appInfoSetActive(payloadAppId, true);
 
     return 0;
 }
@@ -4148,258 +3838,7 @@ static int createFutureFlow (lua_State *L)
         return 0;
 }
 
-static int isMidStreamSession(lua_State *L)
-{
-    DetectorUserData *detectorUserData = NULL;
-
-    detectorUserData = checkDetectorUserData(L, 1);
-
-    /*check inputs and whether this function is called in context of a packet */
-    if (!detectorUserData || !detectorUserData->pDetector->validateParams.pkt)
-    {
-        lua_pushnumber(L, -1);
-        return -1;
-    }
-
-    if (_dpd.sessionAPI->get_session_flags(detectorUserData->pDetector->validateParams.pkt->stream_session) & SSNFLAG_MIDSTREAM)
-    {
-        lua_pushnumber(L, 1);
-        return 1;
-    }
-
-    lua_pushnumber(L, 0);
-    return 0;
-}
-
-/* Check if traffic is going through an HTTP proxy */
-static int isHttpTunnel(lua_State *L)
-{
-    DetectorUserData *detectorUserData = NULL;
-
-    detectorUserData = checkDetectorUserData(L, 1);
-
-    /*check inputs and whether this function is called in context of a packet */
-    if (!detectorUserData || !detectorUserData->pDetector->validateParams.pkt)
-        return -1;
-
-    httpSession *hsession = detectorUserData->pDetector->validateParams.flowp->hsession;
-    if (hsession)
-    {
-        tunnelDest *tunDest = hsession->tunDest;
-        if (tunDest)
-        {
-            lua_pushboolean(L, 1);
-            return 1;
-        }
-    }
-
-    lua_pushboolean(L, 0);
-    return 0;
-}
-
-/* Get destination IP tunneled through a proxy */
-static int getHttpTunneledIp(lua_State* L)
-{
-    DetectorUserData *detectorUserData = NULL;
-
-    detectorUserData = checkDetectorUserData(L, 1);
-    
-    /*check inputs and whether this function is called in context of a packet */
-    if (!detectorUserData || !detectorUserData->pDetector->validateParams.pkt)
-        return -1;
-
-    httpSession *hsession = detectorUserData->pDetector->validateParams.flowp->hsession;
-    if (hsession)
-    {
-        tunnelDest *tunDest = hsession->tunDest;
-        if (!tunDest)
-            lua_pushnumber(L, 0);
-        else 
-            lua_pushnumber(L, sfaddr_get_ip4_value(&(tunDest->ip)));
-    }
-    
-    return 1;
-}
-
-/* Get port tunneled through a proxy */
-static int getHttpTunneledPort(lua_State* L)
-{
-    DetectorUserData *detectorUserData = NULL;
-
-    detectorUserData = checkDetectorUserData(L, 1);
-    
-    /*check inputs and whether this function is called in context of a packet */
-    if (!detectorUserData || !detectorUserData->pDetector->validateParams.pkt)
-        return -1;
-
-    httpSession *hsession = detectorUserData->pDetector->validateParams.flowp->hsession;
-    if (hsession)
-    {
-        tunnelDest *tunDest = hsession->tunDest;
-        if (!tunDest)
-            lua_pushnumber(L, 0);
-        else
-            lua_pushnumber(L, tunDest->port);
-    }
-    
-    return 1;
-}
-
-/*Lua should inject patterns in <clientAppId, classId> format. */
-static int Detector_addCipConnectionClass(lua_State *L)
-{
-    int index = 1;
-
-    DetectorUserData *detectorUserData = checkDetectorUserData(L, index++);
-    if (!detectorUserData || detectorUserData->pDetector->validateParams.pkt)
-    {
-        _dpd.errMsg("%s: Invalid detector user data or context.\n", __func__);
-        return -1;
-    }
-
-    uint32_t appId = lua_tointeger(L, index++);
-    uint32_t classId = lua_tointeger(L, index++);
-
-    if (CipAddConnectionClass(appId, classId) == -1)
-    {
-        return -1;
-    }
-
-    appInfoSetActive(appId, true);
-
-    return 0;
-}
-
-/*Lua should inject patterns in <clientAppId, classId, serviceId> format. */
-static int Detector_addCipPath(lua_State *L)
-{
-    int index = 1;
-
-    DetectorUserData *detectorUserData = checkDetectorUserData(L, index++);
-    if (!detectorUserData || detectorUserData->pDetector->validateParams.pkt)
-    {
-        _dpd.errMsg("%s: Invalid detector user data or context.\n", __func__);
-        return -1;
-    }
-
-    uint32_t appId = lua_tointeger(L, index++);
-    uint32_t classId = lua_tointeger(L, index++);
-    uint8_t serviceId = lua_tointeger(L, index++);
-
-    if (CipAddPath(appId, classId, serviceId) == -1)
-    {
-        return -1;
-    }
-
-    appInfoSetActive(appId, true);
-
-    return 0;
-}
-
-/*Lua should inject patterns in <clientAppId, classId, isClassInstance, attributeId> format. */
-static int Detector_addCipSetAttribute(lua_State *L)
-{
-    int index = 1;
-
-    DetectorUserData *detectorUserData = checkDetectorUserData(L, index++);
-    if (!detectorUserData || detectorUserData->pDetector->validateParams.pkt)
-    {
-        _dpd.errMsg("%s: Invalid detector user data or context.\n", __func__);
-        return -1;
-    }
-
-    uint32_t appId = lua_tointeger(L, index++);
-    uint32_t classId = lua_tointeger(L, index++);
-    bool isClassInstance = lua_toboolean(L, index++);
-    uint32_t attributeId = lua_tointeger(L, index++);
-
-    if (CipAddSetAttribute(appId, classId, isClassInstance, attributeId) == -1)
-    {
-        return -1;
-    }
-
-    appInfoSetActive(appId, true);
-
-    return 0;
-}
-
-
-/*Lua should inject patterns in <clientAppId, serviceId> format. */
-static int Detector_addCipExtendedSymbolService(lua_State *L)
-{
-    int index = 1;
-
-    DetectorUserData *detectorUserData = checkDetectorUserData(L, index++);
-    if (!detectorUserData || detectorUserData->pDetector->validateParams.pkt)
-    {
-        _dpd.errMsg("%s: Invalid detector user data or context.\n", __func__);
-        return -1;
-    }
-
-    uint32_t appId = lua_tointeger(L, index++);
-    uint8_t serviceId = lua_tointeger(L, index++);
-
-    if (CipAddExtendedSymbolService(appId, serviceId) == -1)
-    {
-        return -1;
-    }
-
-    appInfoSetActive(appId, true);
-
-    return 0;
-}
-
-/*Lua should inject patterns in <clientAppId, serviceId> format. */
-static int Detector_addCipService(lua_State *L)
-{
-    int index = 1;
-
-    DetectorUserData *detectorUserData = checkDetectorUserData(L, index++);
-    if (!detectorUserData || detectorUserData->pDetector->validateParams.pkt)
-    {
-        _dpd.errMsg("%s: Invalid detector user data or context.\n", __func__);
-        return -1;
-    }
-
-    uint32_t appId = lua_tointeger(L, index++);
-    uint16_t serviceId = lua_tointeger(L, index++);
-
-    if (CipAddService(appId, serviceId) == -1)
-    {
-        return -1;
-    }
-
-    appInfoSetActive(appId, true);
-
-    return 0;
-}
-
-/*Lua should inject patterns in <clientAppId, enipCommandId> format. */
-static int Detector_addEnipCommand(lua_State *L)
-{
-    int index = 1;
-
-    DetectorUserData *detectorUserData = checkDetectorUserData(L, index++);
-    if (!detectorUserData || detectorUserData->pDetector->validateParams.pkt)
-    {
-        _dpd.errMsg("%s: Invalid detector user data or context.\n", __func__);
-        return -1;
-    }
-
-    uint32_t appId = lua_tointeger(L, index++);
-    uint16_t commandId = lua_tointeger(L, index++);
-
-    if (CipAddEnipCommand(appId, commandId) == -1)
-    {
-        return -1;
-    }
-
-    appInfoSetActive(appId, true);
-
-    return 0;
-}
-
-static const luaL_Reg Detector_methods[] = {
+static const luaL_reg Detector_methods[] = {
   /* Obsolete API names.  No longer use these!  They are here for backward
    * compatibility and will eventually be removed. */
   /*  - "memcmp" is now "matchSimplePattern" (below) */
@@ -4438,18 +3877,7 @@ static const luaL_Reg Detector_methods[] = {
   {"addSipServer",             Detector_addSipServer},
   {"addSSLCnamePattern",       Detector_addSSLCnamePattern},
   {"addHostPortApp",           Detector_addHostPortApp},
-  {"addHostPortAppDynamic",    Detector_addHostPortAppDynamic},
   {"addDNSHostPattern",        Detector_addDNSHostPattern},
-  {"registerClientDetectorCallback",    Detector_registerClientCallback},
-  {"registerServiceDetectorCallback",   Detector_registerServiceCallback},
-
-  /* CIP registration */
-  {"addCipConnectionClass",    Detector_addCipConnectionClass},
-  {"addCipPath",               Detector_addCipPath},
-  {"addCipSetAttribute",       Detector_addCipSetAttribute},
-  {"addCipExtendedSymbolService", Detector_addCipExtendedSymbolService},
-  {"addCipService",            Detector_addCipService},
-  {"addEnipCommand",           Detector_addEnipCommand},
 
   /*Obsolete - new detectors should not use this API */
   {"init",                     service_init},
@@ -4524,11 +3952,6 @@ static const luaL_Reg Detector_methods[] = {
   {"addPortPatternService",    addPortPatternService},
 
   {"createFutureFlow",         createFutureFlow},
-  {"isMidStreamSession",       isMidStreamSession},
-
-  { "isHttpTunnel",             isHttpTunnel },
-  { "getHttpTunneledIp",        getHttpTunneledIp },
-  { "getHttpTunneledPort",      getHttpTunneledPort },
 
   {0, 0}
 };
@@ -4572,6 +3995,10 @@ void Detector_fini(void *data)
                     detector->packageInfo.client.cleanFunctionName, lua_tostring(myLuaState, -1));
 #endif
         }
+    }
+    else
+    {
+        _dpd.errMsg("%s: DetectorFini not provided\n",detector->name);
     }
 
     freeDetector(detector);
@@ -4624,7 +4051,7 @@ static int Detector_tostring (
   return 1;
 }
 
-static const luaL_Reg Detector_meta[] = {
+static const luaL_reg Detector_meta[] = {
   {"__gc",       Detector_gc},
   {"__tostring", Detector_tostring},
   {0, 0}

@@ -101,7 +101,7 @@
 
 \begin{document}
 
-\title{SNORT\textsuperscript{\textregistered} Users Manual\\2.9.18}
+\title{SNORT\textsuperscript{\textregistered} Users Manual\\2.9.9}
 
 \author{The Snort Project}
 
@@ -115,7 +115,7 @@ Copyright \copyright 2001-2003 Chris Green
 
 Copyright \copyright 2003-2013 Sourcefire, Inc.
 
-Copyright \copyright 2014-2021 Cisco and/or its affiliates. All rights reserved.
+Copyright \copyright 2014-2016 Cisco and/or its affiliates. All rights reserved.
 
 \tableofcontents{}
 
@@ -1098,7 +1098,7 @@ This information is only output in IDS mode (when snort is run with the
 \texttt{-c <conf>} option).
 
 \begin{itemize}
-\item Alerts is the number of alert, and block actions processed as
+\item Alerts is the number of activate, alert, and block actions processed as
 determined by the rule actions.  Here block includes block, drop, and reject
 actions.
 \end{itemize}
@@ -1556,7 +1556,7 @@ list:
 
 \url{http://marc.theaimsgroup.com/?l=snort-users}
 
-at \verb?snort-users@lists.snort.org? provide informative announcements
+at \verb?snort-users@lists.sourceforge.net? provide informative announcements
 as well as a venue for community discussion and support. There's a lot to
 Snort, so sit back with a beverage of your choosing and read the documentation
 and mailing list archives.
@@ -4256,28 +4256,6 @@ max hostname logging size defined in snort : 256
 
 \end{note}
 
-\item \texttt{normalize\_random\_nulls\_in\_text}
-
-This option normalizes the text content with randomly encoded null bytes in 16LE,16BE,32LE and
-32BE UTF encodings to UTF8 in the server response. It relies on file preprocessor to determine
-if the content is text. Hence file preprocessor should be enabled and configured with prepackaged
-file magics wihtout which this option is not effective.
-
-\begin {note}
-This opton relies on file prepreprocessor to determine if content can safely be considered as text
-before normalizing. However, it is possible that non text file types unknown to file preprocessor
-may get normalized as this option treats file types unknown to file preprocessor as text. Such cases
-may result in false positives or false negatives in detection. 
-
-\end{note}
-
-\item \texttt{fast\_blocking}
-
-This option enables inspecting http data before the data is flushed. This enables early IPS rule
-evaluation so that the block rules will take into effect and the connection is blocked at the earliest
-instead of blocking later after flushing the data. This config will be effective only when inline
-normalisation is enabled.
-
 \item \texttt{disabled}
 
 This optional keyword is allowed with any policy to avoid packet processing.
@@ -5359,9 +5337,13 @@ the unified2.
 \end{verbatim}
 
 \item \texttt{legacy\_mode}
-By default, HTTP2 traffic is not supported. You can use "legacy\_mode no"
-to enable HTTP2 support.
-If http legacy mode is configured, HTTP2 inspection is disabled.
+By default, HTTP2 traffic is not supported. To enable it you need:
+\begin{itemize}
+\item Install nghttp library from https://nghttp2.org/
+\item If nghttp is not installed in default path, use with\_libnghttp2\_includes and
+with\_libnghttp2\_libraries to point to the correct path during ``configure'' step.
+\item  Enable HTTP2 support in http\_inspect configuration with ``legacy\_mode no''
+\end{itemize}
 
 \end{slist}
 
@@ -11208,10 +11190,10 @@ For proper functioning of the preprocessor:
 \end{itemize}
 
 \subsubsection{Preprocessor Configuration}
-AppId dynamic preprocessor is enabled by default(from snort-2.9.12).
-The preprocessor can be disabled during build time by including the following option in ./configure:
+AppId dynamic preprocessor can be enabled during build time. The
+following options must be included in ./configure:
 
---disable-open-appid
+--enable-open-appid
 
 The configuration name is "appid":
 
@@ -14207,8 +14189,8 @@ The rule header contains the information that defines the who, where, and what
 of a packet, as well as what to do in the event that a packet with all the
 attributes indicated in the rule should show up. The first item in a rule is
 the rule action. The rule action tells Snort what to do when it finds a packet
-that matches the rule criteria. There are 3 available default actions in Snort,
-alert, log, pass. In addition, if you are running Snort
+that matches the rule criteria. There are 5 available default actions in Snort,
+alert, log, pass, activate, and dynamic. In addition, if you are running Snort
 in inline mode, you have additional options which include drop, reject, and
 sdrop. 
 
@@ -14220,6 +14202,11 @@ log the packet
 \item log - log the packet 
 
 \item pass - ignore the packet 
+
+\item activate - alert and then turn on another dynamic rule  
+
+\item dynamic - remain idle until activated by an activate rule , then act as a
+log rule
 
 \item drop - block and log the packet
 
@@ -14402,8 +14389,45 @@ Operator}
 \subsection{Activate/Dynamic Rules}
 \label{dynamic rules}
 
-Activate and Dynamic rules are phased out in favor of a combination of
+\begin{note}
+
+Activate and Dynamic rules are being phased out in favor of a combination of
 tagging (\ref{tag section}) and flowbits (\ref{flowbits}). 
+
+\end{note}
+
+Activate/dynamic rule pairs give Snort a powerful capability. You can now have
+one rule activate another when its action is performed for a set number of
+packets. This is very useful if you want to set Snort up to perform follow on
+recording when a specific rule goes off. Activate rules act just like alert
+rules, except they have a {*}required{*} option field: activates.  Dynamic
+rules act just like log rules, but they have a different option field:
+activated\_by. Dynamic rules have a second required field as well, count. 
+
+Activate rules are just like alerts but also tell Snort to add a rule when a
+specific network event occurs. Dynamic rules are just like log rules except are
+dynamically enabled when the activate rule id goes off. 
+
+Put 'em together and they look like Figure \ref{activate/dynamic rule example}.
+
+\begin{figure}
+\begin{verbatim}
+    activate tcp !$HOME_NET any -> $HOME_NET 143 (flags:PA; \
+        content:"|E8C0FFFFFF|/bin"; activates:1;  \
+        msg:"IMAP buffer overflow!";)
+    dynamic tcp !$HOME_NET any -> $HOME_NET 143 (activated_by:1; count:50;)
+\end{verbatim}
+
+\caption{Activate/Dynamic Rule Example}
+\label{activate/dynamic rule example}
+\end{figure}
+
+These rules tell Snort to alert when it detects an IMAP buffer overflow and
+collect the next 50 packets headed for port 143 coming from outside \$HOME\_NET
+headed to \$HOME\_NET. If the buffer overflow happened and was successful,
+there's a very good possibility that useful data will be contained within the
+next 50 (or whatever) packets going to that same service port on the network,
+so there's value in collecting those packets for later analysis.
 
 \section{Rule Options}
 
@@ -18325,6 +18349,43 @@ this:
     pass tcp any any -> 192.168.1.1 80 (flags:S; tag:session,exclusive;)
 \end{verbatim}
 
+\subsection{activates}
+
+The \texttt{activates} keyword allows the rule writer to specify a rule to add
+when a specific network event occurs. See Section \ref{dynamic rules} for more
+information.
+
+\subsubsection{Format}
+
+\begin{verbatim}
+    activates:1;
+\end{verbatim}
+
+\subsection{activated\_by}
+
+The \texttt{activated\_by} keyword allows the rule writer to dynamically enable
+a rule when a specific activate rule is triggered.  See Section \ref{dynamic
+rules} for more information.
+
+\subsubsection{Format}
+
+\begin{verbatim}
+    activated_by:1;
+\end{verbatim}
+
+\subsection{count}
+
+The \texttt{count} keyword must be used in combination with the
+\texttt{activated\_by} keyword.  It allows the rule writer to specify how many
+packets to leave the rule enabled for after it is activated.  See Section
+\ref{dynamic rules} for more information.
+
+\subsubsection{Format}
+
+\begin{verbatim}
+    activated_by:1; count:50;
+\end{verbatim}
+
 \subsection{replace}
 \label{replace}
 
@@ -18446,6 +18507,25 @@ Snort rule by closing connection and sending a notice. \\
 
 The tag keyword allow rules to log more than just the single packet that
 triggered the rule. \\
+
+\hline
+\texttt{activates} &
+
+This keyword  allows the rule writer to specify a rule to add when a specific
+network event occurs. \\
+
+\hline
+\texttt{activated\_by} &
+
+This keyword allows the rule writer to dynamically enable a rule when a
+specific activate rule is triggered. \\
+
+\hline
+\texttt{count} &
+
+This keyword must be used in combination with the \texttt{activated\_by}
+keyword.  It allows the rule writer to specify how many packets to leave the
+rule enabled for after it is activated. \\
 
 \hline
 \texttt{replace} & 
@@ -20037,7 +20117,7 @@ this stuff for their own IDS purposes). Bug fixes are what goes into
 \section{Submitting Patches}
 
 Patches to Snort should be sent to the
-\verb!snort-devel@lists.snort.org!
+\verb!snort-devel@lists.sourceforge.net!
 mailing list.  Patches should done with the command
 \verb!diff -nu snort-orig snort-new!.
 

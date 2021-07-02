@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -27,7 +27,6 @@
 #include <netinet/in.h>
 #include "str_search.h"
 #include "appInfoTable.h"
-#include "common_util.h"
 #include "detector_api.h"
 #include "httpCommon.h"
 #include "http_url_patterns.h"
@@ -913,19 +912,6 @@ int http_detector_finalize(tAppIdConfig *pConfig)
 
 void http_detector_clean(tDetectorHttpConfig *pHttpConfig)
 {
-    int i;
-    for (i = 0; i < sizeof(pHttpConfig->chp_matchers)/sizeof(pHttpConfig->chp_matchers[0]); i++)
-    {
-        _dpd.searchAPI->search_instance_free(pHttpConfig->chp_matchers[i]);
-        pHttpConfig->chp_matchers[i] = NULL;
-    }
-    // These are same as chp_matchers[] and freed in the loop above
-    pHttpConfig->chp_user_agent_matcher = pHttpConfig->chp_host_matcher =
-        pHttpConfig->chp_referer_matcher = pHttpConfig->chp_uri_matcher =
-        pHttpConfig->chp_cookie_matcher = pHttpConfig->chp_req_body_matcher =
-        pHttpConfig->chp_content_type_matcher = pHttpConfig->chp_location_matcher =
-        pHttpConfig->chp_body_matcher = NULL;
-
     if (pHttpConfig->via_matcher)
     {
         _dpd.searchAPI->search_instance_free(pHttpConfig->via_matcher);
@@ -956,6 +942,46 @@ void http_detector_clean(tDetectorHttpConfig *pHttpConfig)
         _dpd.searchAPI->search_instance_free(pHttpConfig->field_matcher);
         pHttpConfig->field_matcher = NULL;
     }
+    if (pHttpConfig->chp_user_agent_matcher)
+     {
+        _dpd.searchAPI->search_instance_free(pHttpConfig->chp_user_agent_matcher);
+        pHttpConfig->chp_user_agent_matcher = NULL;
+     }
+    if (pHttpConfig->chp_host_matcher)
+     {
+        _dpd.searchAPI->search_instance_free(pHttpConfig->chp_host_matcher);
+        pHttpConfig->chp_host_matcher = NULL;
+     }
+    if (pHttpConfig->chp_uri_matcher)
+     {
+        _dpd.searchAPI->search_instance_free(pHttpConfig->chp_uri_matcher);
+        pHttpConfig->chp_uri_matcher = NULL;
+     }
+    if (pHttpConfig->chp_cookie_matcher)
+     {
+        _dpd.searchAPI->search_instance_free(pHttpConfig->chp_cookie_matcher);
+        pHttpConfig->chp_cookie_matcher = NULL;
+     }
+    if (pHttpConfig->chp_content_type_matcher)
+     {
+        _dpd.searchAPI->search_instance_free(pHttpConfig->chp_content_type_matcher);
+        pHttpConfig->chp_content_type_matcher = NULL;
+     }
+    if (pHttpConfig->chp_location_matcher)
+     {
+        _dpd.searchAPI->search_instance_free(pHttpConfig->chp_location_matcher);
+        pHttpConfig->chp_location_matcher = NULL;
+     }
+    if (pHttpConfig->chp_body_matcher)
+     {
+        _dpd.searchAPI->search_instance_free(pHttpConfig->chp_body_matcher);
+        pHttpConfig->chp_body_matcher = NULL;
+     }
+    if (pHttpConfig->chp_referer_matcher)
+     {
+        _dpd.searchAPI->search_instance_free(pHttpConfig->chp_referer_matcher);
+        pHttpConfig->chp_referer_matcher = NULL;
+     }
 
     destroyHostUrlMatcher(&pHttpConfig->hostUrlMatcher);
     destroyHostUrlMatcher(&pHttpConfig->RTMPHostUrlMatcher);
@@ -1102,7 +1128,7 @@ static void extractCHP (char *buf, int bs, int start,
         tmp = strchr(begin, *(adata+i));
         if (tmp)
         {
-            if (!end || (tmp < end))
+            if ((!end) || (end && tmp < end))
                 end = tmp;
         }
     }
@@ -1114,7 +1140,7 @@ static void extractCHP (char *buf, int bs, int start,
         }
         if ((tmp = strchr(begin, 0x0a)))
         {
-            if (!end || (tmp < end))
+            if ((!end) || (end && tmp < end))
                 end = tmp;
         }
     }
@@ -1495,7 +1521,7 @@ tAppId scanCHP (PatternType ptype, char *buf, int buf_size, MatchedCHPAction *mp
     if (!mp)
         return APP_ID_NONE;
 
-    if (appidStaticConfig->disable_safe_search)
+    if (appidStaticConfig.disable_safe_search)
     {
         new_field = NULL;
     }
@@ -1538,7 +1564,7 @@ tAppId scanCHP (PatternType ptype, char *buf, int buf_size, MatchedCHPAction *mp
             hsession->skip_simple_detect = true;
             break;
         case EXTRACT_USER:
-            if (!*user && !appidStaticConfig->chp_userid_disabled)
+            if (!*user && !appidStaticConfig.chp_userid_disabled)
             {
                 extractCHP(buf, buf_size, tmp->index, match->psize,
                        match->action_data, user);
@@ -1559,14 +1585,13 @@ tAppId scanCHP (PatternType ptype, char *buf, int buf_size, MatchedCHPAction *mp
             }
             break;
         case FUTURE_APPID_SESSION_SIP:
-            if (appidStaticConfig->chp_fflow_disabled)
+            if (appidStaticConfig.chp_fflow_disabled)
                 break;
             if (!hsession->fflow)
             {
-                if (!(hsession->fflow = (fflow_info*)_dpd.snortAlloc(1,
-                    sizeof(fflow_info), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+                if (!(hsession->fflow = (fflow_info*)calloc(1,sizeof(fflow_info))))
                 {
-                    appidStaticConfig->chp_fflow_disabled = 1;
+                    appidStaticConfig.chp_fflow_disabled = 1;
                     break;
                 }
             }
@@ -1574,14 +1599,13 @@ tAppId scanCHP (PatternType ptype, char *buf, int buf_size, MatchedCHPAction *mp
                 hsession->fflow->sip = ffSetIp(buf, buf_size, tmp->index, match->psize);
             break;
         case FUTURE_APPID_SESSION_DIP:
-            if (appidStaticConfig->chp_fflow_disabled)
+            if (appidStaticConfig.chp_fflow_disabled)
                 break;
             if (!hsession->fflow)
             {
-                if (!(hsession->fflow = (fflow_info*)_dpd.snortAlloc(1,
-                    sizeof(fflow_info), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+                if (!(hsession->fflow = (fflow_info*)calloc(1,sizeof(fflow_info))))
                 {
-                    appidStaticConfig->chp_fflow_disabled = 1;
+                    appidStaticConfig.chp_fflow_disabled = 1;
                     break;
                 }
             }
@@ -1589,14 +1613,13 @@ tAppId scanCHP (PatternType ptype, char *buf, int buf_size, MatchedCHPAction *mp
                 hsession->fflow->dip = ffSetIp(buf, buf_size, tmp->index, match->psize);
             break;
         case FUTURE_APPID_SESSION_SPORT:
-            if (appidStaticConfig->chp_fflow_disabled)
+            if (appidStaticConfig.chp_fflow_disabled)
                 break;
             if (!hsession->fflow)
             {
-                if (!(hsession->fflow = (fflow_info*)_dpd.snortAlloc(1,
-                     sizeof(fflow_info), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+                if (!(hsession->fflow = (fflow_info*)calloc(1,sizeof(fflow_info))))
                 {
-                    appidStaticConfig->chp_fflow_disabled = 1;
+                    appidStaticConfig.chp_fflow_disabled = 1;
                     break;
                 }
             }
@@ -1604,14 +1627,13 @@ tAppId scanCHP (PatternType ptype, char *buf, int buf_size, MatchedCHPAction *mp
                 hsession->fflow->sport = ffSetPort(buf, buf_size, tmp->index, match->psize);
             break;
         case FUTURE_APPID_SESSION_DPORT:
-            if (appidStaticConfig->chp_fflow_disabled)
+            if (appidStaticConfig.chp_fflow_disabled)
                 break;
             if (!hsession->fflow)
             {
-                if (!(hsession->fflow = (fflow_info*)_dpd.snortAlloc(1,
-                    sizeof(fflow_info), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+                if (!(hsession->fflow = (fflow_info*)calloc(1,sizeof(fflow_info))))
                 {
-                    appidStaticConfig->chp_fflow_disabled = 1;
+                    appidStaticConfig.chp_fflow_disabled = 1;
                     break;
                 }
             }
@@ -1619,14 +1641,13 @@ tAppId scanCHP (PatternType ptype, char *buf, int buf_size, MatchedCHPAction *mp
                 hsession->fflow->dport = ffSetPort(buf, buf_size, tmp->index, match->psize);
             break;
         case FUTURE_APPID_SESSION_PROTOCOL:
-            if (appidStaticConfig->chp_fflow_disabled)
+            if (appidStaticConfig.chp_fflow_disabled)
                 break;
             if (!hsession->fflow)
             {
-                if (!(hsession->fflow = (fflow_info*)_dpd.snortAlloc(1,
-                    sizeof(fflow_info), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+                if (!(hsession->fflow = (fflow_info*)calloc(1,sizeof(fflow_info))))
                 {
-                    appidStaticConfig->chp_fflow_disabled = 1;
+                    appidStaticConfig.chp_fflow_disabled = 1;
                     break;
                 }
             }
@@ -1634,14 +1655,13 @@ tAppId scanCHP (PatternType ptype, char *buf, int buf_size, MatchedCHPAction *mp
                 hsession->fflow->protocol = ffSetProtocol(buf, buf_size, tmp->index, match->psize);
             break;
         case FUTURE_APPID_SESSION_CREATE:
-            if (appidStaticConfig->chp_fflow_disabled)
+            if (appidStaticConfig.chp_fflow_disabled)
                 break;
             if (!hsession->fflow)
             {
-                if (!(hsession->fflow = (fflow_info*)_dpd.snortAlloc(1,
-                    sizeof(fflow_info), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+                if (!(hsession->fflow = (fflow_info*)calloc(1,sizeof(fflow_info))))
                 {
-                    appidStaticConfig->chp_fflow_disabled = 1;
+                    appidStaticConfig.chp_fflow_disabled = 1;
                     break;
                 }
             }
@@ -1908,7 +1928,7 @@ void identifyUserAgent(const u_int8_t *start, int size, tAppId *serviceAppId, tA
                 for (i = 0; i < 3 && appleEmailDetect; i++)
                 {
                     buffPtr = (u_int8_t*) strstr((char *)start, (char *)APPLE_EMAIL_PATTERNS[i]);
-                    appleEmailDetect  = ((u_int8_t*)buffPtr && (i != 0 || buffPtr == ((u_int8_t*)start)));
+                    appleEmailDetect  = ((u_int8_t*)buffPtr && (i != 0 || (i == 0 && buffPtr == ((u_int8_t*)start))));
                 }
                 if (appleEmailDetect)
                 {
@@ -2236,7 +2256,7 @@ tAppId getAppIdFromUrl(char *host, char *url, char **version,
     int host_len;
     int referer_len = 0;
     int referer_path_len = 0;
-    int path_len = 0;
+    int path_len;
     tMlmpPattern patterns[3];
     tMlpPattern query;
     HostUrlDetectorPattern *data;
@@ -2300,16 +2320,13 @@ tAppId getAppIdFromUrl(char *host, char *url, char **version,
             free(temp_host);
             return 0;
         }
-
-        path = strchr(url, '/');
-        if (path)
-            path_len = url + url_len - path;
+        path_len = url_len - host_len;
+        path = url + host_len;
     }
-
-    if (!path_len)
+    else
     {
-        path = "/";
-        path_len = 1;
+        path = NULL;
+        path_len = 0;
     }
 
     patterns[0].pattern = (uint8_t *) host;
@@ -2456,11 +2473,6 @@ void getServerVendorVersion(const uint8_t *data, int len, char **version, char *
                                 tmp[subname_len] = 0;
                                 sub->service = tmp;
                             }
-                            else
-                            {
-                                 _dpd.errMsg("getServerVendorVersion: "
-                                         "Failed to allocate memory for service in sub\n");
-                            }
                             subver_len = p - subver;
                             if (subver_len > 0 && *subver)
                             {
@@ -2469,11 +2481,6 @@ void getServerVendorVersion(const uint8_t *data, int len, char **version, char *
                                     memcpy(tmp, subver, subver_len);
                                     tmp[subver_len] = 0;
                                     sub->version = tmp;
-                                }
-                                else
-                                {
-                                     _dpd.errMsg("getServerVendorVersion: "
-                                             "Failed to allocate memory for version in sub\n");
                                 }
                             }
                             sub->next = *subtype;
@@ -2504,11 +2511,6 @@ void getServerVendorVersion(const uint8_t *data, int len, char **version, char *
                     tmp[subname_len] = 0;
                     sub->service = tmp;
                 }
-                else
-                {
-                     _dpd.errMsg("getServerVendorVersion: "
-                             "Failed to allocate memory for service in sub\n");
-                }
                 subver_len = p - subver;
                 if (subver_len > 0 && *subver)
                 {
@@ -2517,11 +2519,6 @@ void getServerVendorVersion(const uint8_t *data, int len, char **version, char *
                         memcpy(tmp, subver, subver_len);
                         tmp[subver_len] = 0;
                         sub->version = tmp;
-                    }
-                    else
-                    {
-                         _dpd.errMsg("getServerVendorVersion: "
-                                 "Failed to allocate memory for version in sub\n");
                     }
                 }
                 sub->next = *subtype;
@@ -2645,7 +2642,7 @@ static CLIENT_APP_RETCODE http_client_init(const InitClientAppAPI * const init_a
 {
     unsigned i;
 
-    if (appidStaticConfig->http2_detection_enabled)
+    if (appidStaticConfig.http2_detection_enabled)
     {
         for (i=0; i < sizeof(patterns)/sizeof(*patterns); i++)
         {
@@ -2670,10 +2667,10 @@ static CLIENT_APP_RETCODE http_client_validate(const uint8_t *data, uint16_t siz
                                                tAppIdData *flowp, SFSnortPacket *pkt, struct _Detector *userData,
                                                const tAppIdConfig *pConfig)
 {
-    http_client_mod.api->add_app(pkt, dir, pConfig, flowp, APP_ID_HTTP, APP_ID_HTTP + GENERIC_APP_OFFSET, NULL);
+    http_client_mod.api->add_app(flowp, APP_ID_HTTP, APP_ID_HTTP + GENERIC_APP_OFFSET, NULL);
     flowp->rnaClientState = RNA_STATE_FINISHED;
     http_service_mod.api->add_service(flowp, pkt, dir, &http_service_element,
-                                      APP_ID_HTTP, NULL, NULL, NULL, NULL);
+                                      APP_ID_HTTP, NULL, NULL, NULL);
     flowp->rnaServiceState = RNA_STATE_FINISHED;
     setAppIdFlag(flowp, APPID_SESSION_CLIENT_DETECTED | APPID_SESSION_SERVICE_DETECTED);
     clearAppIdFlag(flowp, APPID_SESSION_CONTINUE);

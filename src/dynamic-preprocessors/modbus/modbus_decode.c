@@ -14,7 +14,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2011-2013 Sourcefire, Inc.
  *
  * Author: Ryan Jordan
@@ -263,8 +263,9 @@ static void ModbusCheckResponseLengths(modbus_session_data_t *session, SFSnortPa
         case MODBUS_FUNC_READ_INPUT_REGISTERS:
             if (modbus_payload_len >= MODBUS_BYTE_COUNT_SIZE)
             {
+                /* count of 2-byte registers*/
                 tmp_count = *(packet->payload + MODBUS_MIN_LEN);
-                if (modbus_payload_len == MODBUS_BYTE_COUNT_SIZE + tmp_count)
+                if (modbus_payload_len == MODBUS_BYTE_COUNT_SIZE + 2*tmp_count)
                     check_passed = 1;
             }
             break;

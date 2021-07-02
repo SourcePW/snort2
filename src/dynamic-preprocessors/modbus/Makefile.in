@@ -351,7 +351,6 @@ libsf_modbus_preproc_la_SOURCES = spp_modbus.c spp_modbus.h \
 	modbus_decode.c modbus_decode.h modbus_roptions.c \
 	modbus_roptions.h modbus_paf.c modbus_paf.h $(am__append_1)
 EXTRA_DIST = \
-sf_modbus.vcxproj \
 sf_modbus.dsp
 
 all: all-am

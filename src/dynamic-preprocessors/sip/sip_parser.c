@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2011-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -548,9 +548,7 @@ static int sip_body_parse(SIPMsg *msg, const char *buff, char *end, char **bodyE
     msg->body_data = (uint8_t *)buff;
 
     // Create a media session
-    msg->mediaSession = (SIP_MediaSession *)_dpd.snortAlloc(1,
-                                                sizeof(SIP_MediaSession),
-                                                PP_SIP, PP_MEM_CATEGORY_SESSION);
+    msg->mediaSession = (SIP_MediaSession *)calloc(1, sizeof(SIP_MediaSession));
     if (NULL == msg->mediaSession)
     	return SIP_FAILURE;
     start = (char *) buff;
@@ -1268,8 +1266,7 @@ static int sip_parse_sdp_m(SIPMsg *msg, const char *start, const char *end)
 	spaceIndex = memchr(start, ' ', length); // first space
 	if ((NULL == spaceIndex)||(spaceIndex == end))
 		return SIP_PARSE_ERROR;
-	mdata = (SIP_MediaData *) _dpd.snortAlloc(1, sizeof(SIP_MediaData),
-                                                  PP_SIP, PP_MEM_CATEGORY_SESSION);
+	mdata = (SIP_MediaData *) calloc(1, sizeof(SIP_MediaData));
 
 	if (NULL == mdata)
 		return SIP_PARSE_ERROR;
@@ -1441,12 +1438,11 @@ void sip_freeMediaSession (SIP_MediaSession *mediaSession)
 		DEBUG_WRAP(DebugMessage(DEBUG_SIP, "Clear media ip: %s, port: %d, number of port: %d\n",
 				sfip_to_str(&curNode->maddress), curNode->mport, curNode->numPort ));
 		nextNode = curNode->nextM;
-		_dpd.snortFree(curNode, sizeof(SIP_MediaData), PP_SIP, PP_MEM_CATEGORY_SESSION);
+		free(curNode);
 		curNode = nextNode;
 	}
 	if (NULL != mediaSession)
-	    _dpd.snortFree(mediaSession, sizeof(SIP_MediaSession), PP_SIP,
-                           PP_MEM_CATEGORY_SESSION);
+	  free (mediaSession);
 }
 /********************************************************************
  * Function: sip_freeMediaList

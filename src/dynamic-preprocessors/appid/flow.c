@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -21,7 +21,6 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#include "common_util.h"
 #include "flow.h"
 #include "service_api.h"
 #include "fw_appid.h"
@@ -39,7 +38,6 @@ void AppIdFlowdataFree(tAppIdData *flowp)
             tmp_fd->fd_free(tmp_fd->fd_data);
         tmp_fd->next = fd_free_list;
         fd_free_list = tmp_fd;
-        app_id_flow_data_free_list_count++;
     }
 }
 void AppIdFlowdataFini()
@@ -49,8 +47,7 @@ void AppIdFlowdataFini()
     while ((tmp_fd = fd_free_list))
     {
         fd_free_list = fd_free_list->next;
-        app_id_flow_data_free_list_count--;
-        _dpd.snortFree(tmp_fd, sizeof(*tmp_fd), PP_APP_ID, PP_MEM_CATEGORY_SESSION);
+        free(tmp_fd);
     }
 }
 
@@ -73,7 +70,6 @@ void *AppIdFlowdataRemove(tAppIdData *flowp, unsigned id)
         *pfd = fd->next;
         fd->next = fd_free_list;
         fd_free_list = fd;
-        app_id_flow_data_free_list_count++;
         return fd->fd_data;
     }
     return NULL;
@@ -92,7 +88,6 @@ void AppIdFlowdataDelete(tAppIdData *flowp, unsigned id)
             fd->fd_free(fd->fd_data);
         fd->next = fd_free_list;
         fd_free_list = fd;
-        app_id_flow_data_free_list_count++;
     }
 }
 
@@ -112,7 +107,6 @@ void AppIdFlowdataDeleteAllByMask(tAppIdData *flowp, unsigned mask)
                 fd->fd_free(fd->fd_data);
             fd->next = fd_free_list;
             fd_free_list = fd;
-            app_id_flow_data_free_list_count++;
         }
         else
         {
@@ -129,9 +123,8 @@ int AppIdFlowdataAdd(tAppIdData *flowp, void *data, unsigned id, AppIdFreeFCN fc
     {
         tmp_fd = fd_free_list;
         fd_free_list = tmp_fd->next;
-        app_id_flow_data_free_list_count--;
     }
-    else if (!(tmp_fd = _dpd.snortAlloc(1, sizeof(*tmp_fd), PP_APP_ID, PP_MEM_CATEGORY_SESSION)))
+    else if (!(tmp_fd = malloc(sizeof(*tmp_fd))))
         return -1;
     tmp_fd->fd_id = id;
     tmp_fd->fd_data = data;

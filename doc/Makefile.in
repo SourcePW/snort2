@@ -562,11 +562,7 @@ uninstall-am: uninstall-dist_docDATA
 
 
 .tex.dvi:
-	if [ -f /etc/centos-release ]; then \
-		latex $< && latex $< && latex $<; \
-	else \
-		pslatex $< && pslatex $< && pslatex $<; \
-	fi
+	pslatex $< && pslatex $< && pslatex $<
 
 .dvi.ps:
 	dvips $< -o

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2007-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -46,7 +46,7 @@ PreprocStats sslpp_perf_stats;
 
 tSfPolicyUserContextId ssl_config = NULL;
 
-static void SSLFreeConfig(tSfPolicyUserContextId config, bool full_cleanup);
+static void SSLFreeConfig(tSfPolicyUserContextId config);
 static void SSLCleanExit(int, void *);
 static void SSLResetStats(int, void *);
 static int SSLPP_CheckConfig(struct _SnortConfig *);
@@ -653,8 +653,6 @@ void SSLPP_init(struct _SnortConfig *sc, char *args)
     tSfPolicyId policy_id = _dpd.getParserPolicy(sc);
     SSLPP_config_t *pPolicyConfig = NULL;
 
-	/* For SFR CLI*/
-	_dpd.controlSocketRegisterHandler(CS_TYPE_SSL_STATS, NULL, NULL, &DisplaySSLPPStats);
     if (ssl_config == NULL)
     {
         //create a context
@@ -758,7 +756,7 @@ static int SSLFreeConfigPolicy(
     return 0;
 }
 
-static void SSLFreeConfig(tSfPolicyUserContextId config, bool full_cleanup)
+static void SSLFreeConfig(tSfPolicyUserContextId config)
 {
     SSLPP_config_t *defaultConfig;
     ssl_callback_interface_t *ssl_cb = (ssl_callback_interface_t *)_dpd.getSSLCallback();
@@ -769,7 +767,8 @@ static void SSLFreeConfig(tSfPolicyUserContextId config, bool full_cleanup)
 
     if(defaultConfig && ssl_cb)
     {
-        ssl_cb->policy_free(&(defaultConfig->current_handle), full_cleanup);
+        ssl_cb->policy_free(&(defaultConfig->current_handle), defaultConfig->reload_handle);
+        defaultConfig->reload_handle = NULL;
 #ifdef ENABLE_HA
         if(defaultConfig->ssl_ha_config)
         {
@@ -790,7 +789,7 @@ static void SSLCleanExit(int signal, void *data)
 #ifdef ENABLE_HA
         SSLCleanHA();
 #endif
-        SSLFreeConfig(ssl_config, true);
+        SSLFreeConfig(ssl_config);
         ssl_config = NULL;
     }
 }
@@ -988,8 +987,6 @@ int SSLReloadVerify(struct _SnortConfig *sc, void *swap_config)
     SSLPP_config_t *start_config = NULL;
     tSfPolicyId policyId = _dpd.getDefaultPolicy();
     int ret = 0;
-    bool register_sfssl_preproc_reload_flag = false;
-    ssl_callback_interface_t *ssl_cb = (ssl_callback_interface_t *)_dpd.getSSLCallback();
 
     if (!_dpd.isPreprocEnabled(sc, PP_STREAM))
     {
@@ -1009,33 +1006,16 @@ int SSLReloadVerify(struct _SnortConfig *sc, void *swap_config)
         return -1;
     }
 
-    if (ssl_cb && ssl_cb->reload_mem_adjust_available())
+    if ( reload_config->memcap != start_config->memcap )
     {
-       _dpd.logMsg("SSL reload: SFSSL reload memcap adjust is available.\n");
-       register_sfssl_preproc_reload_flag = true;
-    }
-
-    if (!register_sfssl_preproc_reload_flag &&
-        reload_config->memcap != start_config->memcap)
-    {
-        /* Reload mem adjust not available, restart snort. */
         _dpd.errMsg("SSL reload: Changing the memcap requires a restart.\n");
         return -1;
     }
 
-    if (!register_sfssl_preproc_reload_flag &&
-        reload_config->decrypt_memcap != start_config->decrypt_memcap)
+    if ( reload_config->decrypt_memcap != start_config->decrypt_memcap )
     {
-      /* Reload mem adjust not available, restart snort. */
-      _dpd.errMsg("SSL reload: Changing the decrypt_memcap requires a restart.\n");
-      return -1;
-    }
-
-    if (reload_config->memcap != start_config->memcap)
-    {
-        /* reload mem adjust is available, any change in sfssl memcap, adjust the difference in sftls memcap */
-        reload_config->decrypt_memcap += reload_config->memcap - start_config->memcap;
-        _dpd.logMsg("SSL reload: Change in sfssl memcap:%d, sftls memcap:%d.\n", reload_config->memcap, reload_config->decrypt_memcap);
+        _dpd.errMsg("SSL reload: Changing the decrypt_memcap requires a restart.\n");
+        return -1;
     }
 
     ret = SSLPP_PolicyInit(sc, ssl_swap_config, reload_config, policyId, true);
@@ -1043,15 +1023,6 @@ int SSLReloadVerify(struct _SnortConfig *sc, void *swap_config)
     if (!ret)
     {
         start_config->reload_handle = reload_config->current_handle;
-    }
-
-    if (register_sfssl_preproc_reload_flag)
-    {
-      /* Always register the SFSSL preproc reload, if sftls memcap adjuster is available
-       * even in case where decrypt memcap doesn't change, may be we will add sftls_memcap in
-       * ssl_tuning.conf file which might be differrent.
-       */
-      ssl_cb->register_reload_mem_adjust(sc, reload_config);
     }
 
     return ret;
@@ -1076,6 +1047,6 @@ void SSLReloadSwapFree(void *data)
     if (data == NULL)
         return;
 
-    SSLFreeConfig((tSfPolicyUserContextId)data, false);
+    SSLFreeConfig((tSfPolicyUserContextId)data);
 }
 #endif

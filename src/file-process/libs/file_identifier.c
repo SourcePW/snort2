@@ -1,7 +1,7 @@
 /*
  **
  **
- **  Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ **  Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  **  Copyright (C) 2012-2013 Sourcefire, Inc.
  **
  **  This program is free software; you can redistribute it and/or modify
@@ -39,7 +39,6 @@
 #include "mstring.h"
 #include "sfghash.h"
 #include "file_config.h"
-#include "memory_stats.h"
 
 uint32_t memory_used = 0; /*Track memory usage*/
 
@@ -85,11 +84,11 @@ static inline void *calloc_mem(size_t size)
 {
     void *ret;
     IdentifierMemoryBlock *new = NULL;
-    ret = SnortPreprocAlloc(1, size, PP_FILE, PP_MEM_CATEGORY_SESSION);
+    ret = SnortAlloc(size);
     memory_used += size;
     /*For memory management*/
     size = sizeof(*new);
-    new = (IdentifierMemoryBlock *)SnortPreprocAlloc(1, size, PP_FILE, PP_MEM_CATEGORY_SESSION);
+    new = (IdentifierMemoryBlock *)SnortAlloc(size);
     new->mem_block = ret;
     if (!id_memory_root)
     {
@@ -487,8 +486,8 @@ void file_identifiers_free(void *conf)
     while (id_memory_current)
     {
         id_memory_next = id_memory_current->next;
-        SnortPreprocFree(id_memory_current->mem_block, sizeof(IdentifierNode), PP_FILE, PP_MEM_CATEGORY_SESSION);
-        SnortPreprocFree(id_memory_current, sizeof(IdentifierMemoryBlock), PP_FILE, PP_MEM_CATEGORY_SESSION);
+        free(id_memory_current->mem_block);
+        free(id_memory_current);
         id_memory_current = id_memory_next;
     }
 
@@ -527,8 +526,8 @@ char *file_type_test(void *conf)
     unsigned int i;
     uint32_t type_id;
 
-    FileContext *context = SnortPreprocAlloc(1, sizeof (*context), PP_FILE, PP_MEM_CATEGORY_SESSION);
-    
+    FileContext *context = SnortAlloc(sizeof (*context));
+
     static const char *file_type = "MSEXE";
 
     printf("Check string:");
@@ -550,7 +549,7 @@ char *file_type_test(void *conf)
         printf("File type is: %s (%d)\n",
                 file_type_name(conf, type_id), type_id);
 
-    SnortPreprocFree(context, sizeof(FileContext), PP_FILE, PP_MEM_CATEGORY_SESSION);
+    free(context);
     return ((char *)file_type);
 }
 #endif

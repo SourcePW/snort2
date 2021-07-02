@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2020 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2005-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -101,17 +101,11 @@
  * should both match the ones specified in the
  * AM_INIT_AUTOMAKE() macro of configure.in
  */
-#define VERSION "2.9.18"VERSION_ENABLE_RESPONSE"-WIN32"VERSION_DEBUG
+#define VERSION "2.9.9.0"VERSION_ENABLE_RESPONSE"-WIN32"VERSION_DEBUG
 #define PACKAGE "snort"
 
 #define IFNAMSIZ   255
 
-/* _WIN32_WINNT has been modified to support SetDllDirectory API introduced in
- * Windows Server 2003 with SP1 and Windows XP with SP2 for Windows DLL Load Vulnerability.
- * As per documentation available on support forum, the macro corresponding to 0x0502 is _WIN32_WINNT_WS03.
- * However, Visual studio 6.0 on Win XP SP3 reports this as an undeclared identifier.
- * So, we decided to use numerical value instead of macro.
- */
 #undef _WIN32_WINNT
 #define _WIN32_WINNT 0x0502
 #undef NTDDI_VERSION

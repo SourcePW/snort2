@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2011-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -1181,7 +1181,8 @@ static char* GetListInfo(INFO info)
     ListInfo *info_value;
     base = (uint8_t *)segment_basePtr();
     info_value = (ListInfo *)(&base[info]);
-
+    if (!info_value)
+        return NULL;
     switch(info_value->listType)
     {
     case DECISION_NULL:

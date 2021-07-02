@@ -1,7 +1,7 @@
 /* $Id */
 
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 **
@@ -159,13 +159,6 @@ void SetupSSH(void)
 #endif
 }
 
-#ifdef REG_TEST
-static inline void PrintSSHSize(void)
-{
-    _dpd.logMsg("\nSSH Session Size: %lu\n", (long unsigned int)sizeof(SSHData));
-}
-#endif
-
 /* Initializes the SSH preprocessor module and registers
  * it in the preprocessor list.
  *
@@ -180,10 +173,6 @@ static void SSHInit(struct _SnortConfig *sc, char *argp)
 {
     tSfPolicyId policy_id = _dpd.getParserPolicy(sc);
     SSHConfig *pPolicyConfig = NULL;
-
-#ifdef REG_TEST
-    PrintSSHSize();
-#endif
 
     if (ssh_config == NULL)
     {

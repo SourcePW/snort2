@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2003-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -55,7 +55,6 @@
 #include "hi_ui_server_lookup.h"
 #include "hi_ui_config.h"
 #include "hi_cmd_lookup.h"
-#include "memory_stats.h"
 
 /*
 **  NAME
@@ -196,8 +195,7 @@ int hi_ui_config_reset_server(HTTPINSPECT_CONF *ServerConf)
     for( i=0; i<HTTP_MAX_XFF_FIELDS; i++ )
         if( ServerConf->xff_headers[i] != NULL )
         {
-            SnortPreprocFree(ServerConf->xff_headers[i],
-                 sizeof(*(ServerConf->xff_headers[i])), PP_HTTPINSPECT, PP_MEM_CATEGORY_CONFIG);
+            free( ServerConf->xff_headers[i] );
             ServerConf->xff_headers[i] = NULL;
         }
 

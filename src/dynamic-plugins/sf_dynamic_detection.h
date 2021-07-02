@@ -15,7 +15,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2005-2013 Sourcefire, Inc.
  *
  * Author: Steven Sturges
@@ -30,18 +30,19 @@
 #include "snort.h"
 
 /* Function prototypes for Dynamic Detection Plugins */
-void CloseDynamicDetectionLibs(SnortConfig *sc);
-void LoadAllDynamicDetectionLibs(SnortConfig *, const char * const path);
-int LoadDynamicDetectionLib(SnortConfig *, const char * const library_name, int indent);
+void CloseDynamicDetectionLibs(void);
+void LoadAllDynamicDetectionLibs(const char * const path);
+int LoadDynamicDetectionLib(const char * const library_name, int indent);
 int InitDynamicDetectionPlugins(SnortConfig *);
-void RemoveDuplicateDetectionPlugins(SnortConfig *sc);
+void RemoveDuplicateDetectionPlugins(void);
 
+typedef int (*InitDetectionLibFunc)(SnortConfig *);
 typedef int (*DumpDetectionRules)(void);
 
 typedef int (*RequiredEngineLibFunc)(DynamicPluginMeta *);
 
 void *GetNextEnginePluginVersion(void *p);
-void *GetNextDetectionPluginVersion(SnortConfig *sc, void *p);
+void *GetNextDetectionPluginVersion(void *p);
 void *GetNextPreprocessorPluginVersion(void *p);
 DynamicPluginMeta *GetDetectionPluginMetaData(void *p);
 DynamicPluginMeta *GetEnginePluginMetaData(void *p);

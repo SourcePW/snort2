@@ -1,7 +1,7 @@
 /*
  **
  **
- **  Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ **  Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  **  Copyright (C) 2013-2013 Sourcefire, Inc.
  **
  **  This program is free software; you can redistribute it and/or modify
@@ -36,8 +36,6 @@
 #include <stdio.h>
 #include <assert.h>
 #include "file_mempool.h"
-#include "memory_stats.h"
-#include "preprocids.h"
 #include "util.h"
 
 /*This magic is used for double free detection*/
@@ -85,8 +83,7 @@ static inline void safe_mempool_free_pools(SafeMemPool *mempool)
 
     if (mempool->datapool != NULL)
     {
-        SnortPreprocFree(mempool->datapool, mempool->obj_size * mempool->total, PP_FILE, 
-                PP_MEM_CATEGORY_MEMPOOL);
+        free(mempool->datapool);
         mempool->datapool = NULL;
     }
 
@@ -121,7 +118,7 @@ int safe_mempool_init(SafeMemPool *mempool, uint64_t num_objects, size_t obj_siz
     /* this is the basis pool that represents all the *data pointers
      * in the list
      */
-    mempool->datapool = SnortPreprocAlloc(num_objects, obj_size, PP_FILE, PP_MEM_CATEGORY_MEMPOOL);
+    mempool->datapool = calloc(num_objects, obj_size);
     if(mempool->datapool == NULL)
     {
         ErrorMessage("%s(%d) safe_mempool_init(): Failed to init datapool\n",
@@ -221,7 +218,7 @@ void *safe_mempool_alloc(SafeMemPool *mempool)
 
     if (*(MagicType *)b != ((uint64_t)FREE_MAGIC))
     {
-        ErrorMessage("%s(%d) safe_mempool_alloc(): Possible memory corruption! \n",
+        ErrorMessage("%s(%d) safe_mempool_alloc(): Allocation errors! \n",
                 __FILE__, __LINE__);
     }
 
@@ -247,15 +244,15 @@ static inline int _safe__mempool_remove(CircularBuffer *cb, void *obj)
     if (obj == NULL)
         return SAFE_MEM_FAIL;
 
+    if(cbuffer_write(cb, obj))
+    {
+        return SAFE_MEM_FAIL;
+    }
+
     if (*(MagicType *)obj == ((uint64_t)FREE_MAGIC))
     {
         DEBUG_WRAP(ErrorMessage("%s(%d) safe_mempool_remove(): Double free! \n",
                 __FILE__, __LINE__););
-        return SAFE_MEM_FAIL;
-    }
-
-    if (cbuffer_write(cb, obj))
-    {
         return SAFE_MEM_FAIL;
     }
 

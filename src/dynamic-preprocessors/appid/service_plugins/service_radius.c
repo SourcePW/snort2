@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -204,22 +204,22 @@ static int radius_validate(ServiceValidationArgs* args)
         goto fail;
     }
 inprocess:
-    radius_service_mod.api->service_inprocess(flowp, args->pkt, dir, &svc_element, NULL);
+    radius_service_mod.api->service_inprocess(flowp, args->pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 success:
     radius_service_mod.api->add_service(flowp, args->pkt, dir, &svc_element,
-                                        APP_ID_RADIUS, NULL, NULL, NULL, NULL);
+                                        APP_ID_RADIUS, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 not_compatible:
     radius_service_mod.api->incompatible_data(flowp, args->pkt, dir, &svc_element,
-                                              radius_service_mod.flow_data_index, args->pConfig, NULL);
+                                              radius_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOT_COMPATIBLE;
 
 fail:
     radius_service_mod.api->fail_service(flowp, args->pkt, dir, &svc_element,
-                                         radius_service_mod.flow_data_index, args->pConfig, NULL);
+                                         radius_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 }
 
@@ -306,22 +306,22 @@ static int radius_validate_accounting(ServiceValidationArgs* args)
         goto fail;
     }
 inprocess:
-    radius_service_mod.api->service_inprocess(flowp, args->pkt, dir, &acct_svc_element, NULL);
+    radius_service_mod.api->service_inprocess(flowp, args->pkt, dir, &acct_svc_element);
     return SERVICE_INPROCESS;
 
 success:
     radius_service_mod.api->add_service(flowp, args->pkt, dir, &acct_svc_element,
-                                        APP_ID_RADIUS_ACCT, NULL, NULL, NULL, NULL);
+                                        APP_ID_RADIUS_ACCT, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 not_compatible:
     radius_service_mod.api->incompatible_data(flowp, args->pkt, dir, &acct_svc_element,
-                                              radius_service_mod.flow_data_index, args->pConfig, NULL);
+                                              radius_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOT_COMPATIBLE;
 
 fail:
     radius_service_mod.api->fail_service(flowp, args->pkt, dir, &acct_svc_element,
-                                         radius_service_mod.flow_data_index, args->pConfig, NULL);
+                                         radius_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 }
 

@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -131,16 +131,16 @@ static int svc_mysql_validate(ServiceValidationArgs* args)
     data += 6;
     if (data >= end) goto fail;
     mysql_service_mod.api->add_service(flowp, args->pkt, args->dir, &svc_element,
-                                       APP_ID_MYSQL, NULL, (char *)p, NULL, NULL);
+                                       APP_ID_MYSQL, NULL, (char *)p, NULL);
     return SERVICE_SUCCESS;
 
 inprocess:
-    mysql_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element, NULL);
+    mysql_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element);
     return SERVICE_INPROCESS;
 
 fail:
     mysql_service_mod.api->fail_service(flowp, args->pkt, args->dir, &svc_element,
-                                        mysql_service_mod.flow_data_index, args->pConfig, NULL);
+                                        mysql_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 
 }

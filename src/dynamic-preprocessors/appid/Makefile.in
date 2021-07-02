@@ -135,7 +135,6 @@ am__objects_1 = libsf_appid_preproc_la-commonAppMatcher.lo \
 	libsf_appid_preproc_la-service_state.lo \
 	libsf_appid_preproc_la-spp_appid.lo \
 	libsf_appid_preproc_la-appId.lo \
-	libsf_appid_preproc_la-appId_ss.lo \
 	libsf_appid_preproc_la-appIdApi.lo \
 	libsf_appid_preproc_la-appInfoTable.lo \
 	libsf_appid_preproc_la-appIdStats.lo \
@@ -196,7 +195,6 @@ am__objects_1 = libsf_appid_preproc_la-commonAppMatcher.lo \
 	libsf_appid_preproc_la-detector_sip.lo \
 	libsf_appid_preproc_la-detector_pattern.lo \
 	libsf_appid_preproc_la-detector_dns.lo \
-	libsf_appid_preproc_la-detector_cip.lo \
 	libsf_appid_preproc_la-common_util.lo \
 	libsf_appid_preproc_la-sf_multi_mpse.lo \
 	libsf_appid_preproc_la-sf_mlmp.lo \
@@ -316,11 +314,12 @@ FGREP = @FGREP@
 GREP = @GREP@
 ICONFIGFLAGS = @ICONFIGFLAGS@
 INCLUDES = -I${top_builddir}/src/dynamic-preprocessors/include \
-        -I$(APPID_SRC_DIR)/../libs \
+	-I${top_builddir}/src/dynamic-preprocessors/libs \
 	-I$(APPID_SRC_DIR)/util \
 	-I$(APPID_SRC_DIR)/service_plugins \
 	-I$(APPID_SRC_DIR)/client_plugins  \
-	-I$(APPID_SRC_DIR)/detector_plugins  
+	-I$(APPID_SRC_DIR)/detector_plugins \
+        -I${srcdir}/../libs  
 
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
@@ -437,7 +436,6 @@ APPID_SOURCES = $(APPID_SRC_DIR)/commonAppMatcher.c \
 	$(APPID_SRC_DIR)/luaDetectorModule.h \
 	$(APPID_SRC_DIR)/service_state.c $(APPID_SRC_DIR)/spp_appid.c \
 	$(APPID_SRC_DIR)/appId.c $(APPID_SRC_DIR)/appId.h \
-	$(APPID_SRC_DIR)/appId_ss.h $(APPID_SRC_DIR)/appId_ss.c \
 	$(APPID_SRC_DIR)/appIdApi.c \
 	$(APPID_SRC_DIR)/commonAppMatcher.h $(APPID_SRC_DIR)/flow.h \
 	$(APPID_SRC_DIR)/hostPortAppCache.h \
@@ -474,7 +472,6 @@ APPID_SOURCES = $(APPID_SRC_DIR)/commonAppMatcher.c \
 	$(APPID_SRC_DIR)/client_plugins/client_app_tns.c \
 	$(APPID_SRC_DIR)/client_plugins/client_app_vnc.c \
 	$(APPID_SRC_DIR)/client_plugins/clientAppConfig.h \
-	$(APPID_SRC_DIR)/client_plugins/client_app_rtp.h \
 	$(APPID_SRC_DIR)/service_plugins/service_util.h \
 	$(APPID_SRC_DIR)/service_plugins/service_base.h \
 	$(APPID_SRC_DIR)/service_plugins/service_base.c \
@@ -556,8 +553,6 @@ APPID_SOURCES = $(APPID_SRC_DIR)/commonAppMatcher.c \
 	$(APPID_SRC_DIR)/detector_plugins/detector_pattern.h \
 	$(APPID_SRC_DIR)/detector_plugins/detector_dns.c \
 	$(APPID_SRC_DIR)/detector_plugins/detector_dns.h \
-	$(APPID_SRC_DIR)/detector_plugins/detector_cip.c \
-	$(APPID_SRC_DIR)/detector_plugins/detector_cip.h \
 	$(APPID_SRC_DIR)/util/common_util.h \
 	$(APPID_SRC_DIR)/util/common_util.c \
 	$(APPID_SRC_DIR)/util/sf_multi_mpse.c \
@@ -589,7 +584,7 @@ libsf_appid_preproc_la_LDFLAGS = -export-dynamic -module @XCCFLAGS@
 @SO_WITH_STATIC_LIB_FALSE@../include/sfmemcap.c \
 @SO_WITH_STATIC_LIB_FALSE@../include/sfprimetable.c
 
-libsf_appid_preproc_la_CFLAGS = -DDYNAMIC_PREPROC_CONTEXT -DSTATIC=static -DINLINE=inline $(LUA_CFLAGS)
+libsf_appid_preproc_la_CFLAGS = -DDYNAMIC_PREPROC_CONTEXT -DSTATIC=static $(LUA_CFLAGS)
 libsf_appid_preproc_la_SOURCES = $(APPID_SOURCES)
 all: all-am
 
@@ -709,9 +704,6 @@ libsf_appid_preproc_la-spp_appid.lo: $(APPID_SRC_DIR)/spp_appid.c
 
 libsf_appid_preproc_la-appId.lo: $(APPID_SRC_DIR)/appId.c
 	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libsf_appid_preproc_la_CFLAGS) $(CFLAGS) -c -o libsf_appid_preproc_la-appId.lo `test -f '$(APPID_SRC_DIR)/appId.c' || echo '$(srcdir)/'`$(APPID_SRC_DIR)/appId.c
-
-libsf_appid_preproc_la-appId_ss.lo: $(APPID_SRC_DIR)/appId_ss.c
-	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libsf_appid_preproc_la_CFLAGS) $(CFLAGS) -c -o libsf_appid_preproc_la-appId_ss.lo `test -f '$(APPID_SRC_DIR)/appId_ss.c' || echo '$(srcdir)/'`$(APPID_SRC_DIR)/appId_ss.c
 
 libsf_appid_preproc_la-appIdApi.lo: $(APPID_SRC_DIR)/appIdApi.c
 	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libsf_appid_preproc_la_CFLAGS) $(CFLAGS) -c -o libsf_appid_preproc_la-appIdApi.lo `test -f '$(APPID_SRC_DIR)/appIdApi.c' || echo '$(srcdir)/'`$(APPID_SRC_DIR)/appIdApi.c
@@ -892,9 +884,6 @@ libsf_appid_preproc_la-detector_pattern.lo: $(APPID_SRC_DIR)/detector_plugins/de
 
 libsf_appid_preproc_la-detector_dns.lo: $(APPID_SRC_DIR)/detector_plugins/detector_dns.c
 	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libsf_appid_preproc_la_CFLAGS) $(CFLAGS) -c -o libsf_appid_preproc_la-detector_dns.lo `test -f '$(APPID_SRC_DIR)/detector_plugins/detector_dns.c' || echo '$(srcdir)/'`$(APPID_SRC_DIR)/detector_plugins/detector_dns.c
-
-libsf_appid_preproc_la-detector_cip.lo: $(APPID_SRC_DIR)/detector_plugins/detector_cip.c
-	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libsf_appid_preproc_la_CFLAGS) $(CFLAGS) -c -o libsf_appid_preproc_la-detector_cip.lo `test -f '$(APPID_SRC_DIR)/detector_plugins/detector_cip.c' || echo '$(srcdir)/'`$(APPID_SRC_DIR)/detector_plugins/detector_cip.c
 
 libsf_appid_preproc_la-common_util.lo: $(APPID_SRC_DIR)/util/common_util.c
 	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libsf_appid_preproc_la_CFLAGS) $(CFLAGS) -c -o libsf_appid_preproc_la-common_util.lo `test -f '$(APPID_SRC_DIR)/util/common_util.c' || echo '$(srcdir)/'`$(APPID_SRC_DIR)/util/common_util.c

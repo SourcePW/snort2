@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -126,7 +126,7 @@ static int direct_connect_validate(ServiceValidationArgs* args)
 
     if (!size)
     {
-        directconnect_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element, NULL);
+        directconnect_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element);
         return SERVICE_INPROCESS;
     }
 
@@ -240,7 +240,7 @@ inprocess:
     if (serviceData->packetCount >= MAX_PACKET_INSPECTION_COUNT)
         goto fail;
 
-    directconnect_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element, NULL);
+    directconnect_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 success:
@@ -251,11 +251,11 @@ success:
     }
 
     directconnect_service_mod.api->add_service(flowp, pkt, dir, &svc_element,
-                                      APP_ID_DIRECT_CONNECT, NULL, NULL, NULL, NULL);
+                                      APP_ID_DIRECT_CONNECT, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 fail:
-    directconnect_service_mod.api->fail_service(flowp, pkt, dir, &svc_element, directconnect_service_mod.flow_data_index, pConfig, NULL);
+    directconnect_service_mod.api->fail_service(flowp, pkt, dir, &svc_element, directconnect_service_mod.flow_data_index, pConfig);
     return SERVICE_NOMATCH;
 }
 
@@ -292,7 +292,7 @@ inprocess:
     if (serviceData->packetCount >= MAX_PACKET_INSPECTION_COUNT)
         goto fail;
 
-    directconnect_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element, NULL);
+    directconnect_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 success:
@@ -304,11 +304,11 @@ success:
 
 reportSuccess:
     directconnect_service_mod.api->add_service(flowp, pkt, dir, &svc_element,
-                                      APP_ID_DIRECT_CONNECT, NULL, NULL, NULL, NULL);
+                                      APP_ID_DIRECT_CONNECT, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 fail:
-    directconnect_service_mod.api->fail_service(flowp, pkt, dir, &svc_element, directconnect_service_mod.flow_data_index, pConfig, NULL);
+    directconnect_service_mod.api->fail_service(flowp, pkt, dir, &svc_element, directconnect_service_mod.flow_data_index, pConfig);
     return SERVICE_NOMATCH;
 
 }

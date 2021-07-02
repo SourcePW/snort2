@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2008-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -29,8 +29,6 @@
 #include "util.h"
 #include "sfActionQueue.h"
 #include "mempool.h"
-#include "active.h"
-#include "pkt_tracer.h"
 
 tSfActionQueueId sfActionQueueInit(
         int queueLength
@@ -76,16 +74,9 @@ void sfActionQueueExecAll(
         )
 {
     //drain
-    while (mempool_numUsedBuckets(&actionQ->mempool))
+    while (mempool_numUsedBucket(&actionQ->mempool))
     {
         sfActionQueueExec(actionQ);
-    }
-    if (Active_PacketWasDropped() || Active_PacketWouldBeDropped())
-    {
-        if (pkt_trace_enabled)
-            addPktTraceData(VERDICT_REASON_SNORT, snprintf(trace_line, MAX_TRACE_LINE,
-                "Snort: processed decoder alerts or actions queue, %s\n", getPktTraceActMsg()));
-        else addPktTraceData(VERDICT_REASON_SNORT, 0);
     }
 }
 

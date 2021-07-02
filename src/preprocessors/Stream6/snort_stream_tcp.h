@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2004-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -85,7 +85,6 @@ bool StreamIsSessionDecryptedTcp( SessionControlBlock *scb );
 uint32_t StreamGetTcpPrunes(void);
 void StreamResetTcpPrunes(void);
 void enableRegisteredPortsForReassembly( struct _SnortConfig *sc );
-uint32_t StreamGetPreprocFlagsTcp(SessionControlBlock *scb);
 
 #ifdef NORMALIZER
 void Stream_PrintNormalizationStats(void);
@@ -102,18 +101,4 @@ bool StreamIsSessionHttp2Tcp( SessionControlBlock *scb );
 void StreamSetSessionHttp2Tcp( SessionControlBlock *scb );
 bool StreamIsSessionHttp2UpgTcp( SessionControlBlock *scb );
 void StreamSetSessionHttp2UpgTcp( SessionControlBlock *scb );
-
-void SessionTCPReload(uint32_t max_sessions, uint16_t pruningTimeout, uint16_t nominalTimeout);
-unsigned SessionTCPReloadAdjust(unsigned maxWork);
-
-void SetFTPFileLocation(void *scbptr ,bool flush);
-
-void set_service_based_flush_policy(SessionControlBlock *scb);
-
-#ifdef HAVE_DAQ_DECRYPTED_SSL
-int StreamSimulatePeerTcpAckp( SessionControlBlock *scb, uint8_t dir, uint32_t tcp_payload_len );
-#endif
-
-size_t get_tcp_used_mempool();
-
 #endif /* STREAM_TCP_H_ */

@@ -1,7 +1,7 @@
 /*
  **
  **
- **  Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ **  Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  **  Copyright (C) 2012-2013 Sourcefire, Inc.
  **
  **  This program is free software; you can redistribute it and/or modify
@@ -38,7 +38,6 @@
 #include "util.h"
 #include "mstring.h"
 #include "parser.h"
-#include "memory_stats.h"
 
 #include "sfutil/strvec.h"
 
@@ -308,7 +307,7 @@ static uint8_t* convertTextToHex(char *text, int *size)
         ParseError("No hexmode argument.");
     }
 
-    hex = (uint8_t*) SnortPreprocAlloc(1, num_toks, PP_FILE, PP_MEM_CATEGORY_SESSION);
+    hex = (uint8_t*) SnortAlloc(num_toks);
     *size = num_toks;
 
     memset(hex_buf, 0, sizeof(hex_buf));
@@ -406,8 +405,8 @@ static void ParseFileContent(RuleInfo *rule, char *args)
         for (predata = rule->magics; predata->next != NULL;
                 predata = predata->next);
     }
-    
-    newdata = SnortPreprocAlloc(1, sizeof(*newdata), PP_FILE, PP_MEM_CATEGORY_SESSION);
+
+    newdata = SnortAlloc(sizeof(*newdata));
 
     DEBUG_WRAP(DebugMessage(DEBUG_FILE,"Content args: %s\n", start_ptr););
 
@@ -522,8 +521,7 @@ static int file_rule_print(RuleInfo *rule)
     {
         int i;
         int buff_size = mdata->content_len * 2 + 1;
-	char *buff = SnortPreprocAlloc(1, buff_size, PP_FILE, 
-                PP_MEM_CATEGORY_SESSION);
+        char *buff = SnortAlloc( buff_size);
         char *start_ptr = buff;
 
         DebugMessage(DEBUG_FILE,"Magic offset: %d\n", mdata->offset);
@@ -536,7 +534,7 @@ static int file_rule_print(RuleInfo *rule)
             buff_size -= num_read;
         }
         DebugMessage(DEBUG_FILE,"Magic content: %s\n", buff);
-        SnortPreprocFree(buff, buff_size, PP_FILE, PP_MEM_CATEGORY_SESSION);
+        free(buff);
     }
     return rule->id;
 }
@@ -549,8 +547,7 @@ __add_id_to_list( uint32_t **list, uint32_t *list_size, const uint32_t id )
 
     (*list_size)++;
     _temp = *list;
-    
-    /* Not accounting this realloc and free for memory serviceability because of infra limitation*/
+
     if ( (*list = realloc(_temp, sizeof(**list)*(*list_size))) == NULL )
     {
         free(_temp);
@@ -560,9 +557,10 @@ __add_id_to_list( uint32_t **list, uint32_t *list_size, const uint32_t id )
     (*list)[(*list_size)-1] = id;
 }
 
-bool get_ids_from_type(const FileConfig* file_config, const char *type, uint32_t **ids,
+bool get_ids_from_type(const void *conf, const char *type, uint32_t **ids,
         uint32_t *count)
 {
+    const FileConfig *file_config = (FileConfig *)conf;
     bool status = false;
     int i;
 
@@ -586,9 +584,10 @@ bool get_ids_from_type(const FileConfig* file_config, const char *type, uint32_t
     return status;
 }
 
-bool get_ids_from_type_version(const FileConfig* file_config, const char *type,
+bool get_ids_from_type_version(const void *conf, const char *type,
         const char *version, uint32_t **ids, uint32_t *count)
 {
+    const FileConfig *file_config = (FileConfig *)conf;
     bool status = false;
     int i;
 
@@ -616,9 +615,10 @@ bool get_ids_from_type_version(const FileConfig* file_config, const char *type,
     return status;
 }
 
-bool get_ids_from_group(const FileConfig* file_config, const char *group, uint32_t **ids,
+bool get_ids_from_group(const void *conf, const char *group, uint32_t **ids,
         uint32_t *count)
 {
+    const FileConfig *file_config = (FileConfig*)conf;
     bool status = false;
     int i;
 
@@ -653,19 +653,21 @@ bool get_ids_from_group(const FileConfig* file_config, const char *group, uint32
 }
 
 /*The main function for parsing rule option*/
-void file_rule_parse(char *args, FileConfig* file_config)
+void file_rule_parse(char *args, void *config)
 {
     char **toks;
     int num_toks;
     int i;
     char configured[sizeof(file_options) / sizeof(FileOptFunc)];
     RuleInfo *rule;
+    FileConfig *file_config = (FileConfig *)config;
 
     if (!file_config)
     {
         return;
     }
-    rule = SnortPreprocAlloc(1, sizeof (*rule), PP_FILE, PP_MEM_CATEGORY_SESSION);
+
+    rule = SnortAlloc(sizeof (*rule));
     DEBUG_WRAP(DebugMessage(DEBUG_FILE,"Loading file configuration: %s\n",
             args););
 
@@ -713,10 +715,11 @@ void file_rule_parse(char *args, FileConfig* file_config)
     mSplitFree(&toks, num_toks);
 }
 
-RuleInfo *file_rule_get(FileConfig* file_config, uint32_t id)
+RuleInfo *file_rule_get(void *conf, uint32_t id)
 {
-    if (file_config)
+    if (conf)
     {
+        FileConfig *file_config = (FileConfig *)conf;
         return (file_config->FileRules[id]);
     }
 
@@ -728,15 +731,15 @@ static void _free_file_magic (MagicData  *magics)
     if (!magics)
         return;
     _free_file_magic(magics->next);
-    SnortPreprocFree(magics->content, sizeof(magics->content_len), PP_FILE, PP_MEM_CATEGORY_SESSION);
-    SnortPreprocFree(magics , sizeof(MagicData), PP_FILE, PP_MEM_CATEGORY_SESSION);
+    free (magics->content);
+    free (magics);
 }
 
 static void _free_file_rule(RuleInfo *rule)
 {
     if ( !rule )
         return;
-    /* Not changing the free here because memory is allocated using strdup */
+
     if ( rule->category )
         free(rule->category);
 
@@ -753,12 +756,13 @@ static void _free_file_rule(RuleInfo *rule)
             StringVector_Delete(rule->groups);
 
     _free_file_magic(rule->magics);
-    SnortPreprocFree(rule, sizeof(RuleInfo), PP_FILE, PP_MEM_CATEGORY_SESSION);
+    free(rule);
 }
 
-void file_rule_free(FileConfig* file_config)
+void file_rule_free(void *conf)
 {
     int id;
+    FileConfig *file_config = (FileConfig *)conf;
 
     if (!file_config)
         return;

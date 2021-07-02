@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2002-2013 Sourcefire, Inc.
  * Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
  * Author: Adam Keeton
@@ -683,6 +683,16 @@ static void appid_dump(u2record *record) {
 }
 
 #endif /* defined(FEAT_OPEN_APPID) */
+static inline void print_uuid (const char* label, uint8_t* data)
+{
+#ifdef HAVE_LIBUUID
+    char buf[37];
+    uuid_unparse(data, buf);
+    printf("%s: %s\n", label, buf);
+#else
+    printf("%s: %.*s\n", label, 16, data);
+#endif
+}
 
 #define LOG_CHARS 16
 

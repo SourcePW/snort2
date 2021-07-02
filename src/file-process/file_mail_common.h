@@ -1,5 +1,5 @@
 /*
- ** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ ** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * ** Copyright (C) 2012-2013 Sourcefire, Inc.
  * ** AUTHOR: Hui Cao
  * **

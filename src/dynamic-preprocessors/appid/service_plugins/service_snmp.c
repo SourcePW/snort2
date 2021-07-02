@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -68,8 +68,7 @@ typedef enum
     SNMP_PDU_TRAP,
     SNMP_PDU_GET_BULK_REQUEST,
     SNMP_PDU_INFORM_REQUEST,
-    SNMP_PDU_TRAPV2,
-    SNMP_PDU_REPORT
+    SNMP_PDU_TRAPV2
 } SNMPPDUType;
 
 #pragma pack(1)
@@ -127,9 +126,7 @@ static int16_t app_id = 0;
 
 static int snmp_init(const InitServiceAPI * const init_api)
 {
-#ifdef TARGET_BASED
     app_id = init_api->dpd->addProtocolReference("snmp");
-#endif
 
     init_api->RegisterPattern(&snmp_validate, IPPROTO_UDP, SNMP_PATTERN_2, sizeof(SNMP_PATTERN_2), 2, "snmp", init_api->pAppidConfig);
     init_api->RegisterPattern(&snmp_validate, IPPROTO_UDP, SNMP_PATTERN_3, sizeof(SNMP_PATTERN_3), 2, "snmp", init_api->pAppidConfig);
@@ -140,12 +137,12 @@ static int snmp_init(const InitServiceAPI * const init_api)
     init_api->RegisterPattern(&snmp_validate, IPPROTO_UDP, SNMP_PATTERN_2, sizeof(SNMP_PATTERN_2), 4, "snmp", init_api->pAppidConfig);
     init_api->RegisterPattern(&snmp_validate, IPPROTO_UDP, SNMP_PATTERN_3, sizeof(SNMP_PATTERN_3), 4, "snmp", init_api->pAppidConfig);
     init_api->RegisterPattern(&snmp_validate, IPPROTO_UDP, SNMP_PATTERN_4, sizeof(SNMP_PATTERN_4), 4, "snmp", init_api->pAppidConfig);
-    unsigned i;
-    for (i=0; i < sizeof(appIdRegistry)/sizeof(*appIdRegistry); i++)
-    {
-        _dpd.debugMsg(DEBUG_LOG,"registering appId: %d\n",appIdRegistry[i].appId);
-        init_api->RegisterAppId(&snmp_validate, appIdRegistry[i].appId, appIdRegistry[i].additionalInfo, init_api->pAppidConfig);
-    }
+	unsigned i;
+	for (i=0; i < sizeof(appIdRegistry)/sizeof(*appIdRegistry); i++)
+	{
+		_dpd.debugMsg(DEBUG_LOG,"registering appId: %d\n",appIdRegistry[i].appId);
+		init_api->RegisterAppId(&snmp_validate, appIdRegistry[i].appId, appIdRegistry[i].additionalInfo, init_api->pAppidConfig);
+	}
 
     return 0;
 }
@@ -483,14 +480,14 @@ static int snmp_validate(ServiceValidationArgs* args)
                 tmp_sd->state = SNMP_STATE_ERROR;
                 return SERVICE_ENULL;
             }
-            PopulateExpectedFlow(flowp, pf, APPID_SESSION_EXPECTED_EVALUATE, APP_ID_APPID_SESSION_DIRECTION_MAX);
+            PopulateExpectedFlow(flowp, pf, APPID_SESSION_EXPECTED_EVALUATE);
             pf->rnaServiceState = RNA_STATE_STATEFUL;
             pf->scan_flags |= SCAN_HOST_PORT_FLAG;
-            sfaddr_copy_to_raw(&pf->common.initiator_ip, sip);
+	    sfaddr_copy_to_raw(&pf->common.initiator_ip, sip);
        }
         break;
     case SNMP_STATE_RESPONSE:
-        if (pdu == SNMP_PDU_GET_RESPONSE || pdu == SNMP_PDU_REPORT)
+        if (pdu == SNMP_PDU_GET_RESPONSE)
         {
             if (dir == APP_ID_FROM_RESPONDER) goto success;
             goto fail;
@@ -506,7 +503,7 @@ static int snmp_validate(ServiceValidationArgs* args)
         if (dir == APP_ID_FROM_INITIATOR) goto fail;
         break;
     case SNMP_STATE_R_RESPONSE:
-        if (pdu == SNMP_PDU_GET_RESPONSE || pdu == SNMP_PDU_REPORT)
+        if (pdu == SNMP_PDU_GET_RESPONSE)
         {
             if (dir == APP_ID_FROM_INITIATOR) goto success;
             goto fail;
@@ -527,7 +524,7 @@ static int snmp_validate(ServiceValidationArgs* args)
     }
 
 inprocess:
-    snmp_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element, NULL);
+    snmp_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 success:
@@ -551,19 +548,19 @@ success:
     }
     snmp_service_mod.api->add_service(flowp, pkt, dir, &svc_element,
                                       APP_ID_SNMP,
-                                      SNMP_VENDOR_STR, version_str, NULL, NULL);
+                                      SNMP_VENDOR_STR, version_str, NULL);
     return SERVICE_SUCCESS;
 
 bail:
     snmp_service_mod.api->incompatible_data(flowp, pkt, dir, &svc_element,
                                             snmp_service_mod.flow_data_index,
-                                            args->pConfig, NULL);
+                                            args->pConfig);
     return SERVICE_NOT_COMPATIBLE;
 
 fail:
     snmp_service_mod.api->fail_service(flowp, pkt, dir, &svc_element,
                                        snmp_service_mod.flow_data_index,
-                                       args->pConfig, NULL);
+                                       args->pConfig);
     return SERVICE_NOMATCH;
 }
 

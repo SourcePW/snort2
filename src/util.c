@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2002-2013 Sourcefire, Inc.
 ** Copyright (C) 2002 Martin Roesch <roesch@sourcefire.com>
 **
@@ -83,7 +83,6 @@ static struct mallinfo mi;
 #include "ppm.h"
 #include "active.h"
 #include "packet_time.h"
-#include "control/sfcontrol.h"
 
 #ifdef TARGET_BASED
 #include "sftarget_reader.h"
@@ -98,7 +97,6 @@ static struct mallinfo mi;
 #endif
 
 #include "stream_common.h"
-#include "memory_stats.h"
 
 #ifdef PATH_MAX
 #define PATH_MAX_UTIL PATH_MAX
@@ -199,7 +197,7 @@ int DisplayBanner(void)
                BUILD,
                info);
     LogMessage("   ''''    By Martin Roesch & The Snort Team: http://www.snort.org/contact#team\n");
-    LogMessage("           Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.\n");
+    LogMessage("           Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.\n");
     LogMessage("           Copyright (C) 1998-2013 Sourcefire, Inc., et al.\n");
 #ifdef HAVE_PCAP_LIB_VERSION
     LogMessage("           Using %s\n", pcap_lib_version());
@@ -257,14 +255,6 @@ void ts_print(register const struct timeval *tvp, char *timebuf)
     Time = (tvp->tv_sec + localzone) - s;
 
     lt = gmtime(&Time);
-
-    if(!lt)
-    {
-         /* Invalid time, set to 0*/
-         s = 0;
-         Time = 0;
-         lt = gmtime(&Time);
-    }
 
     if (ScOutputIncludeYear())
     {
@@ -515,57 +505,6 @@ void ErrorMessageThrottled(ThrottleInfo *throttleInfo, const char *format,...)
 
 }
 
-/*
- * Function: LogThrottledByTimeCount(ThrottleInfo *,const char *, ...)
- *   
- * Purpose: Print a message based on time and count of messages.
- *      
- * Arguments: throttleInfo => point to the saved throttle state information
- *            format => the formatted message string to print out
- *            ... => format commands/fillers
- *          
- * Returns: void function
- */            
-void LogThrottledByTimeCount(ThrottleInfo *throttleInfo, const char *format,...)
-{
-    char buf[STD_BUF+1];
-    va_list ap;
-    time_t current_time = packet_time();
-
-    if ((!snort_conf) || (!throttleInfo))
-        return;
-
-    if (!ScCheckInternalLogLevel(INTERNAL_LOG_LEVEL__ERROR))
-        return;
-
-    throttleInfo->count++;
-    DEBUG_WRAP(DebugMessage(DEBUG_INIT,"current_time: %d, throttle (%p): count "STDu64", last update: %d\n",
-                (int)current_time, throttleInfo, throttleInfo->count, (int)throttleInfo->lastUpdate );)
-
-    if ((throttleInfo->lastUpdate == 0)
-           || ((current_time - (time_t)throttleInfo->duration_to_log > throttleInfo->lastUpdate)
-           && ((throttleInfo->count == 1)
-           || throttleInfo->count > throttleInfo->count_to_log)))
-    {
-       int index;
-       va_start(ap, format);
-       index = vsnprintf(buf, STD_BUF, format, ap);
-       va_end(ap);
-
-       if (index) 
-       {
-           snprintf(&buf[index - 1], STD_BUF-index,
-               " (suppressed "STDu64" times in the last %d seconds).\n",
-               throttleInfo->count, throttleInfo->lastUpdate
-               ? ((int)(current_time - throttleInfo->lastUpdate))
-               : ((int)throttleInfo->lastUpdate));
-       }
-
-       LogMessage("%s",buf);
-       throttleInfo->lastUpdate = current_time;
-       throttleInfo->count = 0;
-    }
-}
 
 /*
  * Function: LogMessage(const char *, ...)
@@ -768,15 +707,6 @@ NORETURN void FatalError(const char *format,...)
 
     if ( InMainThread() || SnortIsInitializing() )
     {
-        if (!SnortIsInitializing()) 
-        {
-            /*
-             * Shutdown the thread only when the snort is not 
-             * initializing. Because FatalError api can be 
-             * called during initialization as well.
-             */
-            SnortShutdownThreads(1);
-        }
         DAQ_Abort();
         exit(1);
     }
@@ -1075,18 +1005,6 @@ void InitGroups(int user_id, int group_id)
 #define STATS_SEPARATOR \
     "==============================================================================="
 
-static inline int DisplayCount (char *buf, const char* s, uint64_t n, int size)
-{
-    return snprintf(buf+size, CS_STATS_BUF_SIZE-size, "%11s: " FMTu64("12") "\n", s, n);
-}
-
-static inline int DisplayStat (char *buf, const char* s, uint64_t n, uint64_t tot, int size)
-{
-	return snprintf(buf+size, CS_STATS_BUF_SIZE-size,
-        "%11s: " FMTu64("12") " (%7.3f%%)\n",
-        s, n, CalcPct(n, tot));
-}
-
 static inline void LogCount (const char* s, uint64_t n)
 {
     LogMessage("%11s: " FMTu64("12") "\n", s, n);
@@ -1182,9 +1100,9 @@ static void display_mallinfo(void)
     mi = mallinfo();
     LogMessage("%s\n", STATS_SEPARATOR);
     LogMessage("Memory usage summary:\n");
-    LogMessage("  Total non-mmapped bytes (arena):       %lu\n", (unsigned long)mi.arena);
+    LogMessage("  Total non-mmapped bytes (arena):       %d\n", mi.arena);
     LogMessage("  Bytes in mapped regions (hblkhd):      %d\n", mi.hblkhd);
-    LogMessage("  Total allocated space (uordblks):      %lu\n", (unsigned long)mi.uordblks);
+    LogMessage("  Total allocated space (uordblks):      %d\n", mi.uordblks);
     LogMessage("  Total free space (fordblks):           %d\n", mi.fordblks);
     LogMessage("  Topmost releasable block (keepcost):   %d\n", mi.keepcost);
 #ifdef DEBUG
@@ -1197,49 +1115,6 @@ static void display_mallinfo(void)
 
 }
 #endif
-
-void DisplayActionStats (uint16_t type, void *old_context, struct _THREAD_ELEMENT *te, ControlDataSendFunc f)
-{
-    char buffer[CS_STATS_BUF_SIZE + 1];
-    int len = 0;
-    int i = 0;
-    uint64_t total = pc.total_processed;
-    uint64_t pkts_recv = pc.total_from_daq;
-    const DAQ_Stats_t* pkt_stats = DAQ_GetStats();
-
-    if (total) {
-        // ensure proper counting of log_limit
-        SnortEventqResetCounts();
-
-        len += snprintf(buffer, CS_STATS_BUF_SIZE,  "Action Stats:\n");
-        len += DisplayStat(buffer, "Alerts", pc.total_alert_pkts, total, len);
-        len += DisplayStat(buffer, "Logged", pc.log_pkts, total, len);
-        len += DisplayStat(buffer, "Passed", pc.pass_pkts, total, len);
-        len += snprintf(buffer+len, CS_STATS_BUF_SIZE-len,  "Limits:\n");
-        len += DisplayCount(buffer, "Match", pc.match_limit, len);
-        len += DisplayCount(buffer, "Queue", pc.queue_limit, len);
-        len += DisplayCount(buffer, "Log", pc.log_limit, len);
-        len += DisplayCount(buffer, "Event", pc.event_limit, len);
-        len += DisplayCount(buffer, "Alert", pc.alert_limit, len);
-        len += snprintf(buffer+len, CS_STATS_BUF_SIZE-len,  "Verdicts:\n");
-
-        for ( i = 0; i < MAX_DAQ_VERDICT && len < CS_STATS_BUF_SIZE; i++ ) {
-            const char* s = Verdicts[i];
-            len += DisplayStat(buffer, s, pkt_stats->verdicts[i], pkts_recv, len);
-        }
-        if ( pc.internal_blacklist )
-            len += DisplayStat(buffer, "Int Blklst", pc.internal_blacklist, pkts_recv, len);
-
-        if ( pc.internal_whitelist )
-            len += DisplayStat(buffer, "Int Whtlst", pc.internal_whitelist, pkts_recv, len);
-    } else {
-        len = snprintf(buffer, CS_STATS_BUF_SIZE,  "Action Stats are not available\n Total Action Processed:"FMTu64("12") "\n", total);
-    }
-
-    if (-1 == f(te, (const uint8_t *)buffer, len)) {
-        LogMessage("Unable to send data to the frontend\n");
-    }
-}
 
 /* exiting should be 0 for if not exiting, 1 if restarting, and 2 if exiting */
 void DropStats(int exiting)
@@ -1360,13 +1235,6 @@ void DropStats(int exiting)
     LogStat("S5 G 1", pc.s5tcp1, total);
     LogStat("S5 G 2", pc.s5tcp2, total);
 
-    if ( InternalEventIsEnabled(snort_conf->rate_filter_config,
-                INTERNAL_EVENT_SYN_RECEIVED) )
-    {
-        LogStat("SYN RL Evnt", pc.syn_rate_limit_events, total);
-        LogStat("SYN RL Drop", pc.syn_rate_limit_drops, total);
-    }
-
     LogCount("Total", total);
 
     if ( !ScPacketDumpMode() && !ScPacketLogMode() )
@@ -1442,10 +1310,6 @@ void DropStats(int exiting)
 #ifdef SIDE_CHANNEL
     SideChannelStats(exiting, STATS_SEPARATOR);
 #endif /* SIDE_CHANNEL */
-
-#ifndef REG_TEST
-    memory_stats_periodic_handler(NULL, 0);
-#endif /*REG_TEST*/
 
     LogMessage("%s\n", STATS_SEPARATOR);
 }
@@ -1687,8 +1551,8 @@ void GoDaemon(void)
     (void)open("/dev/null", O_RDWR);  /* stdin, fd 0 */
 #endif
 
-    if (dup(0)) {}  /* stdout, fd 0 => fd 1 */
-    if (dup(0)) {}  /* stderr, fd 0 => fd 2 */
+    dup(0);  /* stdout, fd 0 => fd 1 */
+    dup(0);  /* stderr, fd 0 => fd 2 */
 
     SignalWaitingParent();
 #endif /* ! WIN32 */
@@ -2122,9 +1986,6 @@ void SetChroot(char *directory, char **logstore)
                             logdir, *logstore));
 
     LogMessage("Chroot directory = %s\n", directory);
-
-    if(logdir != NULL)
-        free(logdir);
 
 #if 0
     /* XXX XXX */

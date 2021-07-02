@@ -345,7 +345,6 @@ libsf_dns_preproc_la_LDFLAGS = -export-dynamic -module @XCCFLAGS@
 
 libsf_dns_preproc_la_SOURCES = spp_dns.c spp_dns.h $(am__append_1)
 EXTRA_DIST = \
-sf_dns.vcxproj \
 sf_dns.dsp
 
 all: all-am

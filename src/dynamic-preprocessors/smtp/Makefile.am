@@ -52,7 +52,6 @@ smtp_buffer_dump.h
 endif
 
 EXTRA_DIST = \
-sf_smtp.vcxproj \
 sf_smtp.dsp
 
 all-local: $(LTLIBRARIES)

@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -128,17 +128,17 @@ static int dcerpc_tcp_validate(ServiceValidationArgs* args)
     if (retval == SERVICE_SUCCESS)
     {
         dcerpc_service_mod.api->add_service(flowp, args->pkt, args->dir, &tcp_svc_element,
-                                            APP_ID_DCE_RPC, NULL, NULL, NULL, NULL);
+                                            APP_ID_DCE_RPC, NULL, NULL, NULL);
         return SERVICE_SUCCESS;
     }
 
 inprocess:
-    dcerpc_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &tcp_svc_element, NULL);
+    dcerpc_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &tcp_svc_element);
     return SERVICE_INPROCESS;
 
 fail:
     dcerpc_service_mod.api->fail_service(flowp, args->pkt, args->dir, &tcp_svc_element,
-                                         dcerpc_service_mod.flow_data_index, args->pConfig, NULL);
+                                         dcerpc_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 }
 
@@ -182,17 +182,17 @@ static int dcerpc_udp_validate(ServiceValidationArgs* args)
     if (retval == SERVICE_SUCCESS)
     {
         dcerpc_service_mod.api->add_service(flowp, args->pkt, args->dir, &udp_svc_element,
-                                            APP_ID_DCE_RPC, NULL, NULL, NULL, NULL);
+                                            APP_ID_DCE_RPC, NULL, NULL, NULL);
         return SERVICE_SUCCESS;
     }
 
 inprocess:
-    dcerpc_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &udp_svc_element, NULL);
+    dcerpc_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &udp_svc_element);
     return SERVICE_INPROCESS;
 
 fail:
     dcerpc_service_mod.api->fail_service(flowp, args->pkt, args->dir, &udp_svc_element,
-                                         dcerpc_service_mod.flow_data_index, args->pConfig, NULL);
+                                         dcerpc_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 }
 

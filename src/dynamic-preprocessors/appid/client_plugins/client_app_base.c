@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -45,7 +45,6 @@
 #include "client_app_msn.h"
 #include "client_app_aim.h"
 #include "client_app_ym.h"
-#include "detector_cip.h"
 #include "detector_sip.h"
 #include "luaDetectorModule.h"
 #include "luaDetectorApi.h"
@@ -95,8 +94,7 @@ static InitClientAppAPI client_init_api =
     .RegisterPattern = &CClientAppRegisterPattern,
     .RegisterPatternEx = &LuaClientAppRegisterPattern,
     .RegisterPatternNoCase = &CClientAppRegisterPatternNoCase,
-    .RegisterAppId = &appSetClientValidator,
-    .RegisterDetectorCallback = &appSetClientDetectorCallback,
+    .RegisterAppId = &appSetClientValidator
 };
 
 static CleanClientAppAPI clean_api =
@@ -136,9 +134,7 @@ static tRNAClientAppModule *static_client_list[] =
     &pattern_tcp_client_mod,
     &dns_udp_client_mod,
     &dns_tcp_client_mod,
-    &http_client_mod,
-    &cip_client_mod,
-    &enip_client_mod
+    &http_client_mod
 };
 
 /*static const char * const MODULE_NAME = "ClientApp"; */
@@ -161,7 +157,7 @@ RNAClientAppModuleConfig *getClientAppModuleConfig(const char *moduleName, tClie
     return mod_config;
 }
 
-tRNAClientAppModule *ClientAppGetClientAppModule(RNAClientAppFCN fcn, struct _Detector *userdata,
+const tRNAClientAppModule *ClientAppGetClientAppModule(RNAClientAppFCN fcn, struct _Detector *userdata,
                                                       tClientAppConfig *pClientAppConfig)
 {
     RNAClientAppRecord *li;
@@ -616,7 +612,7 @@ void UnconfigureClientApp(tAppIdConfig *pConfig)
  *
  * @param args
  */
-void ClientAppInit(tAppidStaticConfig* appidSC, tAppIdConfig *pConfig)
+void ClientAppInit(tAppIdConfig *pConfig)
 {
     RNAClientAppRecord *li;
 
@@ -627,10 +623,10 @@ void ClientAppInit(tAppidStaticConfig* appidSC, tAppIdConfig *pConfig)
     DisplayClientAppConfig(&pConfig->clientAppConfig);
 
     if (pConfig->clientAppConfig.enabled)
-    {
+     {
         client_init_api.debug = app_id_debug;
         client_init_api.pAppidConfig = pConfig;
-        client_init_api.instance_id = appidSC->instance_id;
+        client_init_api.instance_id = appidStaticConfig.instance_id;
 
         for (li = pConfig->clientAppConfig.tcp_client_app_list; li; li = li->next)
             initialize_module(li, &pConfig->clientAppConfig);
@@ -677,7 +673,7 @@ static ClientAppMatch *match_free_list;
  */
 void CleanupClientApp(tAppIdConfig *pConfig)
 {
-#ifdef APPID_FULL_CLEANUP
+#ifdef RNA_FULL_CLEANUP
     ClientAppMatch *match;
     tClientPatternData *pd;
     RNAClientAppRecord *li;
@@ -781,11 +777,8 @@ static int pattern_match(void* id, void *unused_tree, int index, void* data, voi
     return 0;
 }
 
-void AppIdAddClientApp(SFSnortPacket *p, int direction, const tAppIdConfig *pConfig, tAppIdData *flowp, tAppId service_id, tAppId id, const char *version)
+void AppIdAddClientApp(tAppIdData *flowp, tAppId service_id, tAppId id, const char *version)
 {
-    tAppId tmpAppId = flowp->clientAppId;
-    tAppId tmpServiceAppId = flowp->clientServiceAppId;
-
     if (version)
     {
         if (flowp->clientVersion)
@@ -810,12 +803,6 @@ void AppIdAddClientApp(SFSnortPacket *p, int direction, const tAppIdConfig *pCon
     flowp->clientServiceAppId = service_id;
     flowp->clientAppId = id;
     checkSandboxDetection(id);
-
-    if (id > APP_ID_NONE && tmpAppId != id)
-        CheckDetectorCallback(p, flowp, (APPID_SESSION_DIRECTION) direction, id, pConfig);
-
-    if (service_id > APP_ID_NONE && tmpServiceAppId != service_id)
-        CheckDetectorCallback(p, flowp, (APPID_SESSION_DIRECTION) direction, service_id, pConfig);
 }
 
 static void AppIdAddClientAppInfo(tAppIdData *flowp, const char *info)

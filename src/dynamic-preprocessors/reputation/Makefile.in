@@ -390,7 +390,6 @@ libsf_reputation_preproc_la_LDFLAGS = -export-dynamic -module @XCCFLAGS@
 @HAVE_SHARED_REP_TRUE@./shmem/shmem_mgmt.c 
 
 EXTRA_DIST = \
-sf_reputation.vcxproj \
 sf_reputation.dsp
 
 all: all-am

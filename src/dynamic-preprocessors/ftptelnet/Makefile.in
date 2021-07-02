@@ -122,8 +122,7 @@ am__uninstall_files_from_dir = { \
 am__installdirs = "$(DESTDIR)$(dynamicpreprocessordir)"
 LTLIBRARIES = $(dynamicpreprocessor_LTLIBRARIES)
 @SO_WITH_STATIC_LIB_TRUE@libsf_ftptelnet_preproc_la_DEPENDENCIES =  \
-@SO_WITH_STATIC_LIB_TRUE@	../libsf_dynamic_preproc.la \
-@SO_WITH_STATIC_LIB_TRUE@	../libsf_dynamic_utils.la
+@SO_WITH_STATIC_LIB_TRUE@	../libsf_dynamic_preproc.la
 am__libsf_ftptelnet_preproc_la_SOURCES_DIST = ftp_bounce_lookup.c \
 	ftp_bounce_lookup.h ftp_client.h ftp_cmd_lookup.c \
 	ftp_cmd_lookup.h ftpp_eo_events.h ftpp_eo.h ftpp_eo_log.c \
@@ -145,8 +144,8 @@ am_libsf_ftptelnet_preproc_la_OBJECTS = ftp_bounce_lookup.lo \
 @SO_WITH_STATIC_LIB_FALSE@nodist_libsf_ftptelnet_preproc_la_OBJECTS =  \
 @SO_WITH_STATIC_LIB_FALSE@	sf_dynamic_preproc_lib.lo sf_ip.lo \
 @SO_WITH_STATIC_LIB_FALSE@	sfrt.lo sfrt_dir.lo \
-@SO_WITH_STATIC_LIB_FALSE@	sfPolicyUserData.lo sfmemcap.lo \
-@SO_WITH_STATIC_LIB_FALSE@	ssl.lo ssl_config.lo ssl_inspect.lo \
+@SO_WITH_STATIC_LIB_FALSE@	sfPolicyUserData.lo ssl.lo \
+@SO_WITH_STATIC_LIB_FALSE@	ssl_config.lo ssl_inspect.lo \
 @SO_WITH_STATIC_LIB_FALSE@	sfparser.lo
 libsf_ftptelnet_preproc_la_OBJECTS =  \
 	$(am_libsf_ftptelnet_preproc_la_OBJECTS) \
@@ -357,14 +356,13 @@ AUTOMAKE_OPTIONS = foreign no-dependencies
 dynamicpreprocessordir = ${libdir}/snort_dynamicpreprocessor
 dynamicpreprocessor_LTLIBRARIES = libsf_ftptelnet_preproc.la
 libsf_ftptelnet_preproc_la_LDFLAGS = -export-dynamic -module @XCCFLAGS@
-@SO_WITH_STATIC_LIB_TRUE@libsf_ftptelnet_preproc_la_LIBADD = ../libsf_dynamic_preproc.la ../libsf_dynamic_utils.la
+@SO_WITH_STATIC_LIB_TRUE@libsf_ftptelnet_preproc_la_LIBADD = ../libsf_dynamic_preproc.la
 @SO_WITH_STATIC_LIB_FALSE@nodist_libsf_ftptelnet_preproc_la_SOURCES = \
 @SO_WITH_STATIC_LIB_FALSE@../include/sf_dynamic_preproc_lib.c \
 @SO_WITH_STATIC_LIB_FALSE@../include/sf_ip.c \
 @SO_WITH_STATIC_LIB_FALSE@../include/sfrt.c \
 @SO_WITH_STATIC_LIB_FALSE@../include/sfrt_dir.c \
 @SO_WITH_STATIC_LIB_FALSE@../include/sfPolicyUserData.c \
-@SO_WITH_STATIC_LIB_FALSE@../include/sfmemcap.c \
 @SO_WITH_STATIC_LIB_FALSE@../ssl_common/ssl.c \
 @SO_WITH_STATIC_LIB_FALSE@../ssl_common/ssl_config.c \
 @SO_WITH_STATIC_LIB_FALSE@../ssl_common/ssl_inspect.c \
@@ -382,7 +380,6 @@ libsf_ftptelnet_preproc_la_SOURCES = ftp_bounce_lookup.c \
 	snort_ftptelnet.h spp_ftptelnet.c spp_ftptelnet.h \
 	$(am__append_1)
 EXTRA_DIST = \
-sf_ftptelnet.vcxproj \
 sf_ftptelnet.dsp
 
 all: all-am
@@ -487,9 +484,6 @@ sfrt_dir.lo: ../include/sfrt_dir.c
 
 sfPolicyUserData.lo: ../include/sfPolicyUserData.c
 	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o sfPolicyUserData.lo `test -f '../include/sfPolicyUserData.c' || echo '$(srcdir)/'`../include/sfPolicyUserData.c
-
-sfmemcap.lo: ../include/sfmemcap.c
-	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o sfmemcap.lo `test -f '../include/sfmemcap.c' || echo '$(srcdir)/'`../include/sfmemcap.c
 
 ssl.lo: ../ssl_common/ssl.c
 	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o ssl.lo `test -f '../ssl_common/ssl.c' || echo '$(srcdir)/'`../ssl_common/ssl.c

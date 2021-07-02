@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -300,17 +300,17 @@ static int tns_validate(ServiceValidationArgs* args)
     }
 
 inprocess:
-    tns_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element, NULL);
+    tns_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element);
     return SERVICE_INPROCESS;
 
 success:
     tns_service_mod.api->add_service(flowp, args->pkt, args->dir, &svc_element, APP_ID_ORACLE_TNS,
-                                     NULL, ss->version ? ss->version:NULL, NULL, NULL);
+                                     NULL, ss->version ? ss->version:NULL, NULL);
     return SERVICE_SUCCESS;
 
 fail:
     tns_service_mod.api->fail_service(flowp, args->pkt, args->dir, &svc_element,
-                                      tns_service_mod.flow_data_index, args->pConfig, NULL);
+                                      tns_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 }
 

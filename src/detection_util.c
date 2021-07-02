@@ -1,5 +1,5 @@
 /*
- ** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ ** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  ** Copyright (C) 2002-2013 Sourcefire, Inc.
  ** Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
  **
@@ -64,7 +64,8 @@ const char* http_buffer_name[HTTP_BUFFER_MAX] =
 };
 
 static const char* rule_type[RULE_TYPE__MAX] = {
-    "none", "alert", "drop", "log", "pass", "reject", "sdrop"
+    "none", "activate", "alert", "drop", "dynamic",
+    "log", "pass", "reject", "sdrop"
 };
 
 #define LOG_CHARS 16

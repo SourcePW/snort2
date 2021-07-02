@@ -26,9 +26,7 @@ libfileAPI_a_SOURCES = \
 	file_mempool.h \
 	../sfutil/sf_email_attach_decode.c \
 	../sfutil/sf_email_attach_decode.h \
-	file_mail_common.h\ 
-	file_ss.c\
-	file_ss.h
+	file_mail_common.h 
 
 INCLUDES = @INCLUDES@
 

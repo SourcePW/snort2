@@ -1,7 +1,7 @@
 /*
 **
 **
-**  Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+**  Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 **  Copyright (C) 2012-2013 Sourcefire, Inc.
 **
 **  This program is free software; you can redistribute it and/or modify
@@ -39,14 +39,6 @@ typedef struct _IdentifierMemoryBlock
     struct _IdentifierMemoryBlock *next;  /*next node*/
 }IdentifierMemoryBlock;
 
-#if defined (SIDE_CHANNEL) && defined (REG_TEST)
-typedef struct _FileSSConfig
-{
-  char *startup_input_file;
-  char *runtime_output_file;
-}FileSSConfig;
-#endif
-
 typedef struct _fileConfig
 {
     IdentifierNode *identifier_root; /*Root of magic tries*/
@@ -65,23 +57,17 @@ typedef struct _fileConfig
     int64_t show_data_depth;
 #endif
     int64_t file_depth;
-#ifdef SIDE_CHANNEL
-    bool use_side_channel;
-#ifdef REG_TEST
-    FileSSConfig *file_ss_config;
-#endif
-#endif
 } FileConfig;
 
 /* Return all rule id's that match a a given "type" string.  */
-bool get_ids_from_type( const FileConfig* conf, const char * type, uint32_t ** ids, uint32_t * count );
+bool get_ids_from_type( const void * conf, const char * type, uint32_t ** ids, uint32_t * count );
 
 /* Return all rule id's that match a a given "type" and "version" strings.  */
-bool get_ids_from_type_version( const FileConfig* conf, const char * type, const char * version,
+bool get_ids_from_type_version( const void * conf, const char * type, const char * version,
         uint32_t ** ids, uint32_t * count );
 
 /* Return all rule id's in a given file rule group. */
-bool get_ids_from_group( const FileConfig* conf, const char * group, uint32_t ** ids, uint32_t * count );
+bool get_ids_from_group( const void * conf, const char * group, uint32_t ** ids, uint32_t * count );
 
 /*
  * Parse file magic rule
@@ -90,7 +76,7 @@ bool get_ids_from_group( const FileConfig* conf, const char * group, uint32_t **
  *   char *args: file magic rule string
  *   void *file_config: pointer to file config
  */
-void file_rule_parse(char *args, FileConfig* file_config);
+void file_rule_parse(char *args, void *file_config);
 
 /*
  * Get rule information
@@ -99,13 +85,13 @@ void file_rule_parse(char *args, FileConfig* file_config);
  *   void *file_config: pointer to file config
  *   uint32_t rule_id: file rule ID
  */
-RuleInfo *file_rule_get(FileConfig* conf, uint32_t rule_id);
+RuleInfo *file_rule_get(void *conf, uint32_t rule_id);
 
 /* Free resource used by file rules
  *
  * Args:
  *   void *file_config: pointer to file config
  */
-void file_rule_free(FileConfig* conf);
+void file_rule_free(void* conf);
 #endif
 

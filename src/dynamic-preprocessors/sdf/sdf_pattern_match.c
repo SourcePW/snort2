@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2009-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -594,21 +594,9 @@ sdf_tree_node * FindPiiRecursively(sdf_tree_node *node, char *buf, uint16_t *buf
             if( (*(node->pattern + pattern_index) != '\0') ||
             ((strlen(node->pattern) == pattern_index) && node->num_children))
             {
-                if( (pattern_index < strlen(node->pattern) ) &&
-                    ( (*(node->pattern + pattern_index) == '\\' ) && 
-                      (*(node->pattern + pattern_index+1) == 'D') ) )
-                {
-                    /* Do nothing here, as we found PII which is not ending with '\D'.
-                     * This is not a partial match, we found the full PII, so do not 
-                     * treat this as partial match.
-                     */
-                }
-                else
-                {
-                    *partial_index = pattern_index;
-                    *partial_node = node;
-                    return NULL;
-                }
+                *partial_index = pattern_index;
+                *partial_node = node;
+                return NULL;
             }
         }
 

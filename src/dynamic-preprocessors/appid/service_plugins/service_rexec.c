@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -43,11 +43,8 @@ typedef enum
     REXEC_STATE_COMMAND,
     REXEC_STATE_REPLY,
     REXEC_STATE_DONE,
-    REXEC_STATE_BAIL,
     REXEC_STATE_STDERR_CONNECT_SYN,
-    REXEC_STATE_STDERR_CONNECT_SYN_ACK,
-    REXEC_STATE_STDERR_WAIT,
-    REXEC_STATE_STDERR_DONE
+    REXEC_STATE_STDERR_CONNECT_SYN_ACK
 } REXECState;
 
 
@@ -91,7 +88,7 @@ static int16_t app_id = 0;
 static int rexec_init(const InitServiceAPI * const init_api)
 {
     unsigned i;
-#ifdef TARGET_BASED
+
     app_id = init_api->dpd->addProtocolReference("rexec");
 
     for (i=0; i < sizeof(appIdRegistry)/sizeof(*appIdRegistry); i++)
@@ -99,7 +96,6 @@ static int rexec_init(const InitServiceAPI * const init_api)
         _dpd.debugMsg(DEBUG_LOG,"registering appId: %d\n",appIdRegistry[i].appId);
         init_api->RegisterAppId(&rexec_validate, appIdRegistry[i].appId, appIdRegistry[i].additionalInfo, init_api->pAppidConfig);
     }
-#endif
 
     return 0;
 }
@@ -124,19 +120,6 @@ static void rexec_free_state(void *data)
     }
 }
 
-/* Both the control & data sessions need to go to success else we bail.
-   Let the control/data session know that we're bailing */
-static void rexec_bail(ServiceREXECData *rd, tAppIdData *flowp)
-{
-    clearAppIdFlag(flowp, APPID_SESSION_REXEC_STDERR);
-
-    if (!rd) return;
-
-    rd->state = REXEC_STATE_BAIL;
-    if (rd->child) rd->child->state = REXEC_STATE_BAIL;
-    if (rd->parent) rd->parent->state = REXEC_STATE_BAIL;
-}
-
 static int rexec_validate(ServiceValidationArgs* args)
 {
     ServiceREXECData *rd;
@@ -149,8 +132,6 @@ static int rexec_validate(ServiceValidationArgs* args)
     SFSnortPacket *pkt = args->pkt; 
     const int dir = args->dir;
     uint16_t size = args->size;
-    bool app_id_debug_session_flag = args->app_id_debug_session_flag;
-    char* app_id_debug_session = args->app_id_debug_session;
 
     rd = rexec_service_mod.api->data_get(flowp, rexec_service_mod.flow_data_index);
     if (!rd)
@@ -167,9 +148,6 @@ static int rexec_validate(ServiceValidationArgs* args)
         }
         rd->state = REXEC_STATE_PORT;
     }
-
-    if (app_id_debug_session_flag)
-        _dpd.logMsg("AppIdDbg %s rexec state %d\n", app_id_debug_session, rd->state);
 
     switch (rd->state)
     {
@@ -204,7 +182,6 @@ static int rexec_validate(ServiceValidationArgs* args)
 
                 if (rexec_service_mod.api->data_add(pf, tmp_rd, rexec_service_mod.flow_data_index, &rexec_free_state))
                 {
-                    pf->rnaServiceState = RNA_STATE_FINISHED;
                     free(tmp_rd);
                     return SERVICE_ENOMEM;
                 }
@@ -215,23 +192,22 @@ static int rexec_validate(ServiceValidationArgs* args)
                     tmp_rd->parent = NULL;
                     return SERVICE_ENULL;
                 }
+                rd->child = tmp_rd;
+                rd->state = REXEC_STATE_SERVER_CONNECT;
                 pf->rnaServiceState = RNA_STATE_STATEFUL;
                 pf->scan_flags |= SCAN_HOST_PORT_FLAG;
                 PopulateExpectedFlow(flowp, pf,
                                      APPID_SESSION_CONTINUE |
                                      APPID_SESSION_REXEC_STDERR |
                                      APPID_SESSION_NO_TPI |
+                                     APPID_SESSION_SERVICE_DETECTED |
                                      APPID_SESSION_NOT_A_SERVICE |
-                                     APPID_SESSION_PORT_SERVICE_DONE,
-                                     APP_ID_FROM_RESPONDER);
+                                     APPID_SESSION_PORT_SERVICE_DONE);
                 pf->rnaServiceState = RNA_STATE_STATEFUL;
-                rd->child = tmp_rd;
-                rd->state = REXEC_STATE_SERVER_CONNECT;
-                setAppIdFlag(flowp, APPID_SESSION_CONTINUE);
-                goto success;
             }
             else
                 rd->state = REXEC_STATE_USERNAME;
+
         }
         else rd->state = REXEC_STATE_USERNAME;
         break;
@@ -290,15 +266,8 @@ static int rexec_validate(ServiceValidationArgs* args)
         if (!size) goto inprocess;
         if (dir != APP_ID_FROM_RESPONDER) goto fail;
         if (size != 1) goto fail;
-        if (rd->child)
-        {
-            if(rd->child->state == REXEC_STATE_STDERR_WAIT)
-                rd->child->state = REXEC_STATE_STDERR_DONE;
-            else
-                goto fail;
-        }
-        clearAppIdFlag(flowp, APPID_SESSION_CONTINUE);
         goto success;
+        break;
     case REXEC_STATE_STDERR_CONNECT_SYN:
         rd->state = REXEC_STATE_STDERR_CONNECT_SYN_ACK;
         break;
@@ -306,43 +275,46 @@ static int rexec_validate(ServiceValidationArgs* args)
         if (rd->parent && rd->parent->state == REXEC_STATE_SERVER_CONNECT)
         {
             rd->parent->state = REXEC_STATE_USERNAME;
-            rd->state = REXEC_STATE_STDERR_WAIT;
-            break;
+            clearAppIdFlag(flowp, APPID_SESSION_REXEC_STDERR);
         }
         goto bail;
-    case REXEC_STATE_STDERR_WAIT:
-        /* The only valid way out of this state is for the parent flow to change it. */
-        if (!size) break;
-        goto bail;
-    case REXEC_STATE_STDERR_DONE:
-        clearAppIdFlag(flowp, APPID_SESSION_REXEC_STDERR | APPID_SESSION_CONTINUE);
-        goto success;
-    case REXEC_STATE_BAIL:
     default:
         goto bail;
     }
 
 inprocess:
-    rexec_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element, NULL);
+    if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
+    {
+        rexec_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element);
+    }
     return SERVICE_INPROCESS;
 
 success:
-    rexec_service_mod.api->add_service(flowp, pkt, dir, &svc_element,
-                                       APP_ID_EXEC, NULL, NULL, NULL, NULL);
+    if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
+    {
+        rexec_service_mod.api->add_service(flowp, pkt, dir, &svc_element,
+                                           APP_ID_EXEC, NULL, NULL, NULL);
+    }
     return SERVICE_SUCCESS;
 
 bail:
-    rexec_bail(rd, flowp);
-    rexec_service_mod.api->incompatible_data(flowp, pkt, dir, &svc_element,
-                                             rexec_service_mod.flow_data_index,
-                                             args->pConfig, NULL);
+    if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
+    {
+        rexec_service_mod.api->incompatible_data(flowp, pkt, dir, &svc_element,
+                                                 rexec_service_mod.flow_data_index,
+                                                 args->pConfig);
+    }
+    clearAppIdFlag(flowp, APPID_SESSION_CONTINUE);
     return SERVICE_NOT_COMPATIBLE;
 
 fail:
-    rexec_bail(rd, flowp);
-    rexec_service_mod.api->fail_service(flowp, pkt, dir, &svc_element,
-                                        rexec_service_mod.flow_data_index,
-                                        args->pConfig, NULL);
+    if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
+    {
+        rexec_service_mod.api->fail_service(flowp, pkt, dir, &svc_element,
+                                            rexec_service_mod.flow_data_index,
+                                            args->pConfig);
+    }
+    clearAppIdFlag(flowp, APPID_SESSION_CONTINUE);
     return SERVICE_NOMATCH;
 }
 

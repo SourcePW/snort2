@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2002-2013 Sourcefire, Inc.
 ** Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 **
@@ -125,12 +125,12 @@ static SpoLogBufferDumpData *InitializeLogBufferDumpOutputStream(SnortConfig *sc
     SpoLogBufferDumpData *data;
     char* filename = NULL;
 
-    DEBUG_WRAP(DebugMessage(DEBUG_LOG, "Output: LogBufferDump output stream initialized\n"););
+    DEBUG_WRAP(DebugMessage(DEBUG_LOG, "ParseLogBufferDumpArgs: %s\n", args););
     data = (SpoLogBufferDumpData *)SnortAlloc(sizeof(SpoLogBufferDumpData));
 
     if ( !data )
     {
-        FatalError("log buffer dump: unable to allocate memory!\n");
+        FatalError("alert_full: unable to allocate memory!\n");
     }
 
     const char** dump_file = StringVector_GetVector(sc->buffer_dump_file);
@@ -258,9 +258,11 @@ static void LogBufferDump(Packet *p, const char *msg, void *arg, Event *event)
                      LogBuffer(data->log, bufs[j].buf_name, bufs[j].buf_content, bufs[j].length);
                      // free the http buffers after logging
                      if (i == HTTP_BUFFER_DUMP_FUNC)
+                     {
                         free(bufs[j].buf_content);
-                     bufs[j].buf_content = NULL;
-                     bufs[j].length = 0;
+                        bufs[j].buf_content = NULL;
+                        bufs[j].length = 0;
+                     }
                   }
               }
            }
@@ -282,27 +284,6 @@ static void LogBufferDumpCleanup(int signal, void *arg, const char* msg)
     /* free memory from SpoLogBufferDumpData */
     if ( data->log ) TextLog_Term(data->log);
     free(data);
-
-    /* Checkout for any allocated HTTP buffers not freed yet */
-    TraceBuffer *bufs;
-    int j;
-
-    if ((bdmask & (UINT64_C(1) << HTTP_BUFFER_DUMP_FUNC)) && getBuffers[HTTP_BUFFER_DUMP_FUNC])
-    {
-       bufs = getBuffers[HTTP_BUFFER_DUMP_FUNC]();
-       if (bufs != NULL)
-       {
-          for (j = 0; j < maxBuffers[HTTP_BUFFER_DUMP_FUNC]; j++)
-          {
-             if (bufs[j].buf_content)
-             {
-                free(bufs[j].buf_content);
-                bufs[j].buf_content = NULL;
-                bufs[j].length = 0;
-             }
-          }
-       }
-    }
 }
 
 

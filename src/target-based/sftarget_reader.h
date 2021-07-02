@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2006-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -27,9 +27,6 @@
 #define SF_TARGET_READER_H_
 
 #include "snort.h"
-#ifdef REG_TEST
-#include "reg_test.h"
-#endif
 
 #define SFAT_OK 0
 #define SFAT_ERROR -1
@@ -38,8 +35,6 @@
     if (!current_host) return SFAT_ERROR;
 #define SFAT_CHECKAPP \
     if (!current_app) return SFAT_ERROR;
-
-void SigAttributeTableReloadHandler(int signal);
 
 typedef enum
 {
@@ -149,7 +144,7 @@ void SFAT_Cleanup(void);
 void FreeHostEntry(HostAttributeEntry *host);
 
 /* Parsing Functions -- to be called by Snort parser */
-int SFAT_ParseAttributeTable(char *args, SnortConfig *sc);
+int SFAT_ParseAttributeTable(char *args);
 
 /* Function to swap out new table */
 void AttributeTableReloadCheck(void);
@@ -172,11 +167,4 @@ void SFAT_StartReloadThread(void);
 void SFLAT_init(void);
 void SFLAT_fini(void);
 int  SFLAT_isEnabled(tSfPolicyId id, int parsing);
-
-#ifdef SNORT_RELOAD
-void SFAT_ReloadCheck(struct _SnortConfig *);
-void ReloadAttributeThreadStop(void);
-void SFAT_CleanPrevConfig(void);
-#endif
-
 #endif /* SF_TARGET_READER_H_ */

@@ -1,23 +1,35 @@
-2021-05-26 - Snort 2.9.18
+l2016-11-07 - Snort 2.9.9.0
+[*] New additions
+ 
+ *  New rule option for byte_math. See the Snort manual for details.
 
-[*] New Additions
+ *  Added bitmask and from_end operations to byte_test. See the Snort manual for details.
 
-	  Added range field support in HTTP preprocessor.
+ *  Added a Buffer Dump utility to trace all of the buffers used by snort during inspection.
+    Enable this by --enable-buffer-dump option to configure prior to building. See the Snort manual for details.
 
-	  Added alert for http chunk size mismatch.
+ *  Added new HTTP preprocessor alerts to detect multiple content encoding and multiple content length.
 
-	  Added support to detect snmp 'report pdu'.
+ *  Added support for SMTP Traffic detection over SSL (SMTPS).
 
-	  Added additional stats for SMB preprocessor.
+[*] Improvements
+ *  Fixed an issue which reduces extra service discovery to improve performance.
 
+ *  Fixed multiple issues in AppID.
+      - Reconstructed the call to port-service detection.
+      - Fixed issue where AppId for Facebook over SPDY/HTTP 1.1 was incorrect.
+      - Preventing third-party application identification for expected connections.
 
-[*] Improvements / Fix
+ *  Stability improvement for Stream preprocessor. 
+      - Addressed incorrect flushing of packets whose size is greater than MAXIMUM_PAF_MAX.
+      - Fixed an issue where incorrect length argument in memcpy caused out of bound memory access.
 
-	  Fixed a condition in which alert would not be generated.
+ *  Fixed multiple issues in HttpInspect preprocessor.
+      - Handling chunk encoding followed by \r\r\r\n and \n\n\n\r\r\n.
+      - Fixed an issue with LZMA flash decompression.
 
-	  Fixed possible memory corruption in SMB preprocessor.
+ *  Fixed mime data processing issue in SMTP stateless inspection.
 
-	  Fixed handling ICMP error code -4 .
-
-	  Fixed an error when debugmsgs option enabled in compilation.
-
+ *  Added support to decode packets that contains VLAN with Secure Group Tag (SGT).
+ 
+ *  Fixed Issue related to DLL-Load in Snort on windows platforms for CVE-2016-1417. 

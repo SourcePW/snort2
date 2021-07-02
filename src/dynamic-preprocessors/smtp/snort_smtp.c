@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2005-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -252,8 +252,7 @@ void SMTP_InitCmds(SMTPConfig *config)
         return;
 
     /* add one to CMD_LAST for NULL entry */
-    config->cmds = (SMTPToken *)_dpd.snortAlloc(CMD_LAST + 1, sizeof(SMTPToken), PP_SMTP,
-                                     PP_MEM_CATEGORY_CONFIG);
+    config->cmds = (SMTPToken *)calloc(CMD_LAST + 1, sizeof(SMTPToken));
     if (config->cmds == NULL)
     {
         DynamicPreprocessorFatalMessage("%s(%d) => failed to allocate memory for smtp "
@@ -277,8 +276,7 @@ void SMTP_InitCmds(SMTPConfig *config)
     }
 
     /* initialize memory for command searches */
-    config->cmd_search = (SMTPSearch *)_dpd.snortAlloc(CMD_LAST, sizeof(SMTPSearch), PP_SMTP,
-                                            PP_MEM_CATEGORY_CONFIG);
+    config->cmd_search = (SMTPSearch *)calloc(CMD_LAST, sizeof(SMTPSearch));
     if (config->cmd_search == NULL)
     {
         DynamicPreprocessorFatalMessage("%s(%d) => failed to allocate memory for smtp "
@@ -358,7 +356,6 @@ static SMTP * SMTP_GetNewSession(SFSnortPacket *p, tSfPolicyId policy_id)
 {
     SMTP *ssn;
     SMTPConfig *pPolicyConfig = NULL;
-    int ret = 0;
 
     pPolicyConfig = (SMTPConfig *)sfPolicyUserDataGetCurrent(smtp_config);
 
@@ -388,8 +385,7 @@ static SMTP * SMTP_GetNewSession(SFSnortPacket *p, tSfPolicyId policy_id)
 
     DEBUG_WRAP(DebugMessage(DEBUG_SMTP, "Creating new session data structure\n"););
 
-    ssn = (SMTP *)_dpd.snortAlloc(1, sizeof(SMTP), PP_SMTP,
-                       PP_MEM_CATEGORY_SESSION);
+    ssn = (SMTP *)calloc(1, sizeof(SMTP));
     if (ssn == NULL)
     {
         DynamicPreprocessorFatalMessage("Failed to allocate SMTP session data\n");
@@ -403,17 +399,9 @@ static SMTP * SMTP_GetNewSession(SFSnortPacket *p, tSfPolicyId policy_id)
     smtp_ssn->mime_ssn.mime_stats = &(smtp_stats.mime_stats);
     smtp_ssn->mime_ssn.methods = &(mime_methods);
 
-    if ((ret=_dpd.fileAPI->set_log_buffers(&(smtp_ssn->mime_ssn.log_state), &(pPolicyConfig->log_config),smtp_mempool, p->stream_session, PP_SMTP)) < 0)
+    if (_dpd.fileAPI->set_log_buffers(&(smtp_ssn->mime_ssn.log_state), &(pPolicyConfig->log_config),smtp_mempool) < 0)
     {
-        if( ret == -1 )
-        {
-            if(smtp_stats.log_memcap_exceeded % 10000 == 0)
-            {
-                _dpd.logMsg("WARNING: SMTP memcap exceeded.\n");
-            }
-            smtp_stats.log_memcap_exceeded++;
-        }
-	_dpd.snortFree(ssn, sizeof(*ssn), PP_SMTP, PP_MEM_CATEGORY_SESSION);
+        free(ssn);
         return NULL;
     }
     _dpd.sessionAPI->set_application_data(p->stream_session, PP_SMTP,
@@ -444,7 +432,6 @@ static SMTP * SMTP_GetNewSession(SFSnortPacket *p, tSfPolicyId policy_id)
     pPolicyConfig->ref_count++;
     smtp_stats.sessions++;
     smtp_stats.conc_sessions++;
-    smtp_stats.cur_sessions++;
     if(smtp_stats.max_conc_sessions < smtp_stats.conc_sessions)
         smtp_stats.max_conc_sessions = smtp_stats.conc_sessions;
 
@@ -602,31 +589,25 @@ static void SMTP_SessionFree(void *session_data)
     if(smtp->mime_ssn.decode_state != NULL)
     {
         mempool_free(smtp_mime_mempool, smtp->mime_ssn.decode_bkt);
-	_dpd.snortFree(smtp->mime_ssn.decode_state, sizeof(Email_DecodeState), PP_SMTP,
-             PP_MEM_CATEGORY_SESSION);
+        free(smtp->mime_ssn.decode_state);
     }
 
     if(smtp->mime_ssn.log_state != NULL)
     {
         mempool_free(smtp_mempool, smtp->mime_ssn.log_state->log_hdrs_bkt);
-	_dpd.snortFree(smtp->mime_ssn.log_state, sizeof(MAIL_LogState), PP_SMTP,
-             PP_MEM_CATEGORY_SESSION);
+        free(smtp->mime_ssn.log_state);
     }
 
     if(smtp->auth_name != NULL)
     {
-	_dpd.snortFree(smtp->auth_name, sizeof(*(smtp->auth_name)), PP_SMTP,
-             PP_MEM_CATEGORY_SESSION);
+        free(smtp->auth_name);
     }
     if ( ssl_cb )
         ssl_cb->session_free(smtp->flow_id);
 
-    _dpd.snortFree(smtp, sizeof(*smtp), PP_SMTP, PP_MEM_CATEGORY_SESSION);
+    free(smtp);
     if(smtp_stats.conc_sessions)
         smtp_stats.conc_sessions--;
-
-    if(smtp_stats.cur_sessions)
-    	smtp_stats.cur_sessions--;
 }
 
 static int SMTP_FreeConfigsPolicy(
@@ -663,23 +644,21 @@ void SMTP_FreeConfig(SMTPConfig *config)
         SMTPToken *tmp = config->cmds;
 
         for (; tmp->name != NULL; tmp++)
-            _dpd.snortFree(tmp->name, sizeof(*(tmp->name)), PP_SMTP, PP_MEM_CATEGORY_CONFIG);
+            free(tmp->name);
 
-        _dpd.snortFree(config->cmds, sizeof(*(config->cmds)), PP_SMTP, PP_MEM_CATEGORY_CONFIG);
+        free(config->cmds);
     }
 
     if (config->cmd_config != NULL)
-        _dpd.snortFree(config->cmd_config, sizeof(*(config->cmd_config)), PP_SMTP,
-             PP_MEM_CATEGORY_CONFIG);
+        free(config->cmd_config);
 
     if (config->cmd_search_mpse != NULL)
         _dpd.searchAPI->search_instance_free(config->cmd_search_mpse);
 
     if (config->cmd_search != NULL)
-        _dpd.snortFree(config->cmd_search, sizeof(*(config->cmd_search)), PP_SMTP,
-             PP_MEM_CATEGORY_CONFIG);
+        free(config->cmd_search);
 
-    _dpd.snortFree(config, sizeof(*config), PP_SMTP, PP_MEM_CATEGORY_CONFIG);
+    free(config);
 }
 
 
@@ -767,8 +746,7 @@ static bool SMTP_IsAuthChanged(const uint8_t *start_ptr, const uint8_t *end_ptr)
             auth_changed = true;
     }
     else
-          smtp_ssn->auth_name = _dpd.snortAlloc(1, sizeof(*(smtp_ssn->auth_name)), PP_SMTP,
-                                     PP_MEM_CATEGORY_SESSION);
+        smtp_ssn->auth_name = calloc(1, sizeof(*(smtp_ssn->auth_name)));
 
     /* save the current authentication mechanism*/
     if (!smtp_ssn->auth_name)
@@ -1256,7 +1234,7 @@ static void SMTP_ProcessClientPacket(SFSnortPacket *p)
 #endif
             case STATE_BDATA:
                 DEBUG_WRAP(DebugMessage(DEBUG_SMTP, "DATA STATE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n"););
-                ptr = _dpd.fileAPI->process_mime_data(p, ptr, end, &(smtp_ssn->mime_ssn), 1, true, "SMTP", PP_SMTP);
+                ptr = _dpd.fileAPI->process_mime_data(p, ptr, end, &(smtp_ssn->mime_ssn), 1, true);
                 //ptr = SMTP_HandleData(p, ptr, end, &(smtp_ssn->mime_ssn));
 #ifdef DUMP_BUFFER
                 dumpBuffer(STATE_BDATA_DUMP,p->payload,p->payload_size);
@@ -1692,23 +1670,20 @@ void SnortSMTP(SFSnortPacket *p)
          if(smtp_ssn->mime_ssn.decode_state != NULL)
          {
              mempool_free(smtp_mime_mempool, smtp_ssn->mime_ssn.decode_bkt);
-	     _dpd.snortFree(smtp_ssn->mime_ssn.decode_state, sizeof(Email_DecodeState), PP_SMTP,
-                  PP_MEM_CATEGORY_SESSION);
+             free(smtp_ssn->mime_ssn.decode_state);
              smtp_ssn->mime_ssn.decode_state = NULL;
          }
 
          if(smtp_ssn->mime_ssn.log_state != NULL)
          {
              mempool_free(smtp_mempool, smtp_ssn->mime_ssn.log_state->log_hdrs_bkt);
-	     _dpd.snortFree(smtp_ssn->mime_ssn.log_state, sizeof(MAIL_LogState), PP_SMTP,
-                  PP_MEM_CATEGORY_SESSION);
+             free(smtp_ssn->mime_ssn.log_state);
              smtp_ssn->mime_ssn.log_state = NULL;
          }
 
          if(smtp_ssn->auth_name != NULL)
          {
-	     _dpd.snortFree(smtp_ssn->auth_name, sizeof(*(smtp_ssn->auth_name)), PP_SMTP,
-                  PP_MEM_CATEGORY_SESSION);
+             free(smtp_ssn->auth_name);
              smtp_ssn->auth_name = NULL;
          }
     }

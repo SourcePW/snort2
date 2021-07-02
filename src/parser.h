@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2002-2013 Sourcefire, Inc.
 ** Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 ** Copyright (C) 2000-2001 Andrew R. Baker <andrewb@uab.edu>
@@ -100,6 +100,7 @@
 #define CONFIG_OPT__DETECTION                       "detection"
 #define CONFIG_OPT__DETECTION_FILTER                "detection_filter"
 #define CONFIG_OPT__PROTECTED_CONTENT               "protected_content"
+#define CONFIG_OPT__FTPDATA_TRIM_THRESHOLD          "ftp_data_trim_threshold"
 #ifdef INLINE_FAILOPEN
 # define CONFIG_OPT__DISABLE_INLINE_FAILOPEN         "disable_inline_init_failopen"
 #endif
@@ -233,7 +234,6 @@ extern int file_line;
 /* rule setup funcs */
 SnortConfig * ParseSnortConf(void);
 void ParseRules(SnortConfig *);
-IpsPortFilter** ParseIpsPortList (SnortConfig*, IpProto);
 
 void ParseOutput(SnortConfig *, SnortPolicy *, char *);
 void OrderRuleLists(SnortConfig *, char *);
@@ -362,13 +362,13 @@ void ConfigPacketSnaplen(SnortConfig *, char *);
 void ConfigPcreMatchLimit(SnortConfig *, char *);
 void ConfigPcreMatchLimitRecursion(SnortConfig *, char *);
 void ConfigPerfFile(SnortConfig *sc, char *);
-void ConfigDumpPeriodicMemStatsFile(SnortConfig *, char *);
 void ConfigPidPath(SnortConfig *, char *);
 void ConfigPolicy(SnortConfig *, char *);
 void ConfigIpsPolicyMode(SnortConfig *, char *);
 void ConfigNapPolicyMode(SnortConfig *, char *);
 void ConfigPolicyVersion(SnortConfig *, char *);
 void ConfigProtectedContent(SnortConfig *, char *);
+void ConfigFTPDataTrimThreshold(SnortConfig *, char *);
 #ifdef PPM_MGR
 void ConfigPPM(SnortConfig *, char *);
 #endif
@@ -410,14 +410,12 @@ void ConfigBufferDump(SnortConfig *, char *);
 #endif
 
 int addRtnToOtn(
-        SnortConfig *sc,
         OptTreeNode *otn,
         tSfPolicyId policyId,
         RuleTreeNode *rtn
         );
 
 RuleTreeNode* deleteRtnFromOtn(
-        SnortConfig *sc,
         OptTreeNode *otn,
         tSfPolicyId policyId
         );

@@ -1,7 +1,7 @@
 /* $Id */
 
 /*
- ** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ ** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  ** Copyright (C) 2013-2013 Sourcefire, Inc.
  **
  **
@@ -207,7 +207,7 @@ static void file_config_signature(char *filename, FileSigInfo *sig_info,
         if (!strlen(linebuf))
             continue;
 
-        sha256 = _dpd.snortAlloc(1, SHA256_HASH_SIZE, PP_FILE_INSPECT, PP_MEM_CATEGORY_CONFIG);
+        sha256 = malloc(SHA256_HASH_SIZE);
 
         if (!sha256)
         {
@@ -229,7 +229,7 @@ static void file_config_signature(char *filename, FileSigInfo *sig_info,
 
         if (old_info)
         {
-            _dpd.snortFree(sha256, SHA256_HASH_SIZE, PP_FILE_INSPECT, PP_MEM_CATEGORY_CONFIG);
+            free(sha256);
             _dpd.errMsg("%s(%d) => signature redefined at file: %s (%d), \n"
                     "signature: %s\n",
                     *(_dpd.config_file), *(_dpd.config_line),
@@ -240,7 +240,6 @@ static void file_config_signature(char *filename, FileSigInfo *sig_info,
             sha_table_add(config->sig_table, sha256, sig_info);
         }
     }
-    fclose(fp);
 }
 
 /* Display the configuration for the File preprocessor.

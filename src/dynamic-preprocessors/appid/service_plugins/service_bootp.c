@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -290,14 +290,14 @@ success:
     {
         setAppIdFlag(flowp, APPID_SESSION_CONTINUE);
         bootp_service_mod.api->add_service(flowp, args->pkt, args->dir, &svc_element,
-                                           APP_ID_DHCP, NULL, NULL, NULL, NULL);
+                                           APP_ID_DHCP, NULL, NULL, NULL);
     }
     return SERVICE_SUCCESS;
 
 inprocess:
     if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
     {
-        bootp_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element, NULL);
+        bootp_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element);
     }
     return SERVICE_INPROCESS;
 
@@ -305,7 +305,7 @@ fail:
     if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
     {
         bootp_service_mod.api->fail_service(flowp, args->pkt, args->dir, &svc_element,
-                                            bootp_service_mod.flow_data_index, args->pConfig, NULL);
+                                            bootp_service_mod.flow_data_index, args->pConfig);
     }
     clearAppIdFlag(flowp, APPID_SESSION_CONTINUE);
     return SERVICE_NOMATCH;
@@ -314,7 +314,7 @@ not_compatible:
     if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
     {
         bootp_service_mod.api->incompatible_data(flowp, args->pkt, args->dir, &svc_element,
-                                                 bootp_service_mod.flow_data_index, args->pConfig, NULL);
+                                                 bootp_service_mod.flow_data_index, args->pConfig);
     }
     return SERVICE_NOT_COMPATIBLE;
 }

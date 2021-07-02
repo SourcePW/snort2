@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -230,7 +230,7 @@ static int dns_validate_label(const uint8_t *data, uint16_t *offset, uint16_t si
             *len_valid = 0;
             lbl_ptr = (DNSLabelPtr *)lbl;
             *offset += offsetof(DNSLabelPtr, data);
-            if (*offset > size) return SERVICE_NOMATCH;
+            if (*offset >= size) return SERVICE_NOMATCH;
             tmp = (uint16_t)(ntohs(lbl_ptr->position) & 0x3FFF);
             if (tmp > size - offsetof(DNSLabel, name))
                 return SERVICE_NOMATCH;
@@ -304,11 +304,10 @@ static int dns_validate_query(const uint8_t *data, uint16_t *offset, uint16_t si
             case PATTERN_MX_REC:
             case PATTERN_SOA_REC:
             case PATTERN_NS_REC:
-	    case PATTERN_ANY_REC:
-                dns_service_mod.api->add_dns_query_info(flowp, id, host, host_len, host_offset, record_type, *offset);
+                dns_service_mod.api->add_dns_query_info(flowp, id, host, host_len, host_offset, record_type);
                 break;
             case PATTERN_PTR_REC:
-                dns_service_mod.api->add_dns_query_info(flowp, id, NULL, 0, 0, record_type, *offset);
+                dns_service_mod.api->add_dns_query_info(flowp, id, NULL, 0, 0, record_type);
                 break;
             default:
                 break;
@@ -353,7 +352,6 @@ static int dns_validate_answer(const uint8_t *data, uint16_t *offset, uint16_t s
             case PATTERN_MX_REC:
             case PATTERN_SOA_REC:
             case PATTERN_NS_REC:
-	    // case PATTERN_ANY_REC:  // commented out by design
                 dns_service_mod.api->add_dns_response_info(flowp, id, NULL, 0, 0, rcode, ttl);
                 break;
             case PATTERN_PTR_REC:
@@ -485,7 +483,7 @@ static int dns_udp_validate(ServiceValidationArgs* args)
         rval = (dir == APP_ID_FROM_INITIATOR) ? SERVICE_INVALID_CLIENT:SERVICE_NOMATCH;
         goto udp_done;
     }
-    if ((rval = dns_validate_header(dir, (DNSHeader *)data, appidStaticConfig->dns_host_reporting, flowp)) != SERVICE_SUCCESS)
+    if ((rval = dns_validate_header(dir, (DNSHeader *)data, appidStaticConfig.dns_host_reporting, flowp)) != SERVICE_SUCCESS)
     {
         if (rval == SERVICE_REVERSED)
         {
@@ -495,9 +493,9 @@ static int dns_udp_validate(ServiceValidationArgs* args)
                 {
                     // To get here, we missed the initial query, got a
                     // response, and now we've got another query.
-                    rval = validate_packet(data, size, dir, appidStaticConfig->dns_host_reporting, flowp);
+                    rval = validate_packet(data, size, dir, appidStaticConfig.dns_host_reporting, flowp);
                     if (rval == SERVICE_SUCCESS)
-                        goto success;
+                        goto inprocess;
                 }
                 goto invalid;
             }
@@ -505,7 +503,7 @@ static int dns_udp_validate(ServiceValidationArgs* args)
             {
                 // To get here, we missed the initial query, but now we've got
                 // a response.
-                rval = validate_packet(data, size, dir, appidStaticConfig->dns_host_reporting, flowp);
+                rval = validate_packet(data, size, dir, appidStaticConfig.dns_host_reporting, flowp);
                 if (rval == SERVICE_SUCCESS)
                 {
                     setAppIdFlag(flowp, APPID_SESSION_UDP_REVERSED);
@@ -518,33 +516,35 @@ static int dns_udp_validate(ServiceValidationArgs* args)
         goto udp_done;
     }
 
-    rval = validate_packet(data, size, dir, appidStaticConfig->dns_host_reporting, flowp);
+    rval = validate_packet(data, size, dir, appidStaticConfig.dns_host_reporting, flowp);
+    if ((rval == SERVICE_SUCCESS) && (dir == APP_ID_FROM_INITIATOR))
+        goto inprocess;
 
 udp_done:
     switch (rval)
     {
     case SERVICE_SUCCESS:
 success:
-        // We will declare DNS as soon as we have seen a good query (we do not
-        // wait until we get a reply).
         setAppIdFlag(flowp, APPID_SESSION_CONTINUE);
         dns_service_mod.api->add_service(flowp, args->pkt, dir, &udp_svc_element,
-                                         APP_ID_DNS, NULL, NULL, NULL, NULL);
+                                         APP_ID_DNS, NULL, NULL, NULL);
         return SERVICE_SUCCESS;
     case SERVICE_INVALID_CLIENT:
 invalid:
         dns_service_mod.api->incompatible_data(flowp, args->pkt, dir, &udp_svc_element,
                                                dns_service_mod.flow_data_index,
-                                               args->pConfig, NULL);
+                                               args->pConfig);
         return SERVICE_NOT_COMPATIBLE;
     case SERVICE_NOMATCH:
 nomatch:
         dns_service_mod.api->fail_service(flowp, args->pkt, dir, &udp_svc_element,
                                           dns_service_mod.flow_data_index,
-                                          args->pConfig, NULL);
+                                          args->pConfig);
         return SERVICE_NOMATCH;
-    case SERVICE_INPROCESS:    // inprocess:
-        dns_service_mod.api->service_inprocess(flowp, args->pkt, dir, &udp_svc_element, NULL);
+    case SERVICE_INPROCESS:
+inprocess:
+        dns_udp_client_mod.api->add_app(flowp, APP_ID_NONE, APP_ID_DNS, NULL);
+        dns_service_mod.api->service_inprocess(flowp, args->pkt, dir, &udp_svc_element);
         return SERVICE_INPROCESS;
     default:
         return rval;
@@ -574,7 +574,7 @@ static int dns_tcp_validate(ServiceValidationArgs* args)
     data += sizeof(DNSTCPHeader);
     size -= sizeof(DNSTCPHeader);
     tmp = ntohs(hdr->length);
-    if (tmp < sizeof(DNSHeader) || dns_validate_header(dir, (DNSHeader *)data, appidStaticConfig->dns_host_reporting, flowp))
+    if (tmp < sizeof(DNSHeader) || dns_validate_header(dir, (DNSHeader *)data, appidStaticConfig.dns_host_reporting, flowp))
     {
         if (dir == APP_ID_FROM_INITIATOR)
             goto not_compatible;
@@ -584,7 +584,7 @@ static int dns_tcp_validate(ServiceValidationArgs* args)
 
     if (tmp > size)
         goto not_compatible;
-    rval = validate_packet(data, size, dir, appidStaticConfig->dns_host_reporting, flowp);
+    rval = validate_packet(data, size, dir, appidStaticConfig.dns_host_reporting, flowp);
     if (rval != SERVICE_SUCCESS)
         goto tcp_done;
 
@@ -608,6 +608,7 @@ static int dns_tcp_validate(ServiceValidationArgs* args)
             goto fail;
         dd->id = ((DNSHeader *)data)->id;
         dd->state = DNS_STATE_RESPONSE;
+        goto inprocess;
     }
     else
     {
@@ -631,27 +632,26 @@ tcp_done:
     }
 
 success:
-    // We will declare DNS as soon as we have seen a good query (we do not
-    // wait until we get a reply).
     setAppIdFlag(flowp, APPID_SESSION_CONTINUE);
     dns_service_mod.api->add_service(flowp, args->pkt, dir, &tcp_svc_element,
-                                     APP_ID_DNS, NULL, NULL, NULL, NULL);
+                                     APP_ID_DNS, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 not_compatible:
     dns_service_mod.api->incompatible_data(flowp, args->pkt, dir, &tcp_svc_element,
                                            dns_service_mod.flow_data_index,
-                                           args->pConfig, NULL);
+                                           args->pConfig);
     return SERVICE_NOT_COMPATIBLE;
 
 fail:
     dns_service_mod.api->fail_service(flowp, args->pkt, dir, &tcp_svc_element,
                                       dns_service_mod.flow_data_index,
-                                      args->pConfig, NULL);
+                                      args->pConfig);
     return SERVICE_NOMATCH;
 
 inprocess:
-    dns_service_mod.api->service_inprocess(flowp, args->pkt, dir, &tcp_svc_element, NULL);
+    dns_tcp_client_mod.api->add_app(flowp, APP_ID_NONE, APP_ID_DNS, NULL);
+    dns_service_mod.api->service_inprocess(flowp, args->pkt, dir, &tcp_svc_element);
     return SERVICE_INPROCESS;
 }
 

@@ -27,7 +27,6 @@ ssh_buffer_dump.h
 endif
 
 EXTRA_DIST = \
-sf_ssh.vcxproj \
 sf_ssh.dsp
 
 all-local: $(LTLIBRARIES)

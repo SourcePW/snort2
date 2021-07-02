@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2005-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -32,8 +32,6 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
-#include "ftpp_include.h"
-#include "memory_stats.h"
 
 //#define MDEBUG
 
@@ -42,13 +40,13 @@ static unsigned msize=0;
 void * xmalloc(size_t byteSize)
 {
 #ifdef MDEBUG
-   int * data = (int*)_dpd.snortAlloc(1, byteSize+4,
-                                      PP_FTPTELNET, PP_MEM_CATEGORY_CONFIG);
+   int * data = (int*) malloc( byteSize + 4 );
    unsigned m = msize;
 
+   if(data)memset(data,0,byteSize+4);
 #else
-   int * data = (int*)_dpd.snortAlloc(1, byteSize,
-                                      PP_FTPTELNET, PP_MEM_CATEGORY_CONFIG);
+   int * data = (int*) malloc( byteSize );
+   if(data)memset(data,0,byteSize);
 #endif
 
    if( data == NULL )
@@ -76,7 +74,7 @@ void * xmalloc(size_t byteSize)
 #endif
 }
 
-void xfree( void * p , int n )
+void xfree( void * p )
 {
 #ifdef MDEBUG
    unsigned m = msize;
@@ -84,11 +82,11 @@ void xfree( void * p , int n )
    q--;
    msize -= *q;
 
-   _dpd.snortFree(q, n+4, PP_FTPTELNET, PP_MEM_CATEGORY_CONFIG);
+   free(q);
 
 #else
 
-   _dpd.snortFree(p, n, PP_FTPTELNET, PP_MEM_CATEGORY_CONFIG);
+   free(p);
 
 #endif
 

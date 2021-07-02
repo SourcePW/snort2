@@ -33,7 +33,6 @@ modbus_buffer_dump.h
 endif
 
 EXTRA_DIST = \
-sf_modbus.vcxproj \
 sf_modbus.dsp
 
 all-local: $(LTLIBRARIES)

@@ -78,9 +78,7 @@ PRE_UNINSTALL = :
 POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
-@BUILD_SNORT_RELOAD_TRUE@@SO_WITH_STATIC_LIB_TRUE@am__append_1 = ../libsf_dynamic_utils.la
-@BUILD_SNORT_RELOAD_TRUE@@SO_WITH_STATIC_LIB_FALSE@am__append_2 = ../include/appdata_adjuster.c ../include/sfxhash.c ../include/sfhashfcn.c ../include/sfmemcap.c ../include/sfprimetable.c ../include/reg_test.h ../include/reg_test.c
-@BUILD_BUFFER_DUMP_TRUE@am__append_3 = \
+@BUILD_BUFFER_DUMP_TRUE@am__append_1 = \
 @BUILD_BUFFER_DUMP_TRUE@dcerpc2_buffer_dump.c \
 @BUILD_BUFFER_DUMP_TRUE@dcerpc2_buffer_dump.h
 
@@ -124,8 +122,7 @@ am__uninstall_files_from_dir = { \
 am__installdirs = "$(DESTDIR)$(dynamicpreprocessordir)"
 LTLIBRARIES = $(dynamicpreprocessor_LTLIBRARIES)
 @SO_WITH_STATIC_LIB_TRUE@libsf_dce2_preproc_la_DEPENDENCIES =  \
-@SO_WITH_STATIC_LIB_TRUE@	../libsf_dynamic_preproc.la \
-@SO_WITH_STATIC_LIB_TRUE@	$(am__append_1)
+@SO_WITH_STATIC_LIB_TRUE@	../libsf_dynamic_preproc.la
 am__libsf_dce2_preproc_la_SOURCES_DIST = includes/dcerpc.h \
 	includes/smb.h dce2_debug.c dce2_debug.h dce2_utils.c \
 	dce2_utils.h dce2_list.c dce2_list.h dce2_memory.c \
@@ -143,16 +140,10 @@ am_libsf_dce2_preproc_la_OBJECTS = dce2_debug.lo dce2_utils.lo \
 	dce2_config.lo dce2_roptions.lo spp_dce2.lo snort_dce2.lo \
 	dce2_smb.lo dce2_smb2.lo dce2_tcp.lo dce2_co.lo dce2_udp.lo \
 	dce2_cl.lo dce2_http.lo dce2_paf.lo $(am__objects_1)
-@BUILD_SNORT_RELOAD_TRUE@@SO_WITH_STATIC_LIB_FALSE@am__objects_2 = appdata_adjuster.lo \
-@BUILD_SNORT_RELOAD_TRUE@@SO_WITH_STATIC_LIB_FALSE@	sfxhash.lo \
-@BUILD_SNORT_RELOAD_TRUE@@SO_WITH_STATIC_LIB_FALSE@	sfhashfcn.lo \
-@BUILD_SNORT_RELOAD_TRUE@@SO_WITH_STATIC_LIB_FALSE@	sfmemcap.lo \
-@BUILD_SNORT_RELOAD_TRUE@@SO_WITH_STATIC_LIB_FALSE@	sfprimetable.lo \
-@BUILD_SNORT_RELOAD_TRUE@@SO_WITH_STATIC_LIB_FALSE@	reg_test.lo
 @SO_WITH_STATIC_LIB_FALSE@nodist_libsf_dce2_preproc_la_OBJECTS =  \
 @SO_WITH_STATIC_LIB_FALSE@	sf_dynamic_preproc_lib.lo sf_ip.lo \
 @SO_WITH_STATIC_LIB_FALSE@	sfrt.lo sfrt_dir.lo \
-@SO_WITH_STATIC_LIB_FALSE@	sfPolicyUserData.lo $(am__objects_2)
+@SO_WITH_STATIC_LIB_FALSE@	sfPolicyUserData.lo
 libsf_dce2_preproc_la_OBJECTS = $(am_libsf_dce2_preproc_la_OBJECTS) \
 	$(nodist_libsf_dce2_preproc_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
@@ -361,15 +352,14 @@ AUTOMAKE_OPTIONS = foreign no-dependencies
 dynamicpreprocessordir = ${libdir}/snort_dynamicpreprocessor
 dynamicpreprocessor_LTLIBRARIES = libsf_dce2_preproc.la
 libsf_dce2_preproc_la_LDFLAGS = -export-dynamic -module @XCCFLAGS@
-@SO_WITH_STATIC_LIB_TRUE@libsf_dce2_preproc_la_LIBADD =  \
-@SO_WITH_STATIC_LIB_TRUE@	../libsf_dynamic_preproc.la \
-@SO_WITH_STATIC_LIB_TRUE@	$(am__append_1)
-@SO_WITH_STATIC_LIB_FALSE@nodist_libsf_dce2_preproc_la_SOURCES =  \
-@SO_WITH_STATIC_LIB_FALSE@	../include/sf_dynamic_preproc_lib.c \
-@SO_WITH_STATIC_LIB_FALSE@	../include/sf_ip.c ../include/sfrt.c \
-@SO_WITH_STATIC_LIB_FALSE@	../include/sfrt_dir.c \
-@SO_WITH_STATIC_LIB_FALSE@	../include/sfPolicyUserData.c \
-@SO_WITH_STATIC_LIB_FALSE@	$(am__append_2)
+@SO_WITH_STATIC_LIB_TRUE@libsf_dce2_preproc_la_LIBADD = ../libsf_dynamic_preproc.la
+@SO_WITH_STATIC_LIB_FALSE@nodist_libsf_dce2_preproc_la_SOURCES = \
+@SO_WITH_STATIC_LIB_FALSE@../include/sf_dynamic_preproc_lib.c \
+@SO_WITH_STATIC_LIB_FALSE@../include/sf_ip.c \
+@SO_WITH_STATIC_LIB_FALSE@../include/sfrt.c \
+@SO_WITH_STATIC_LIB_FALSE@../include/sfrt_dir.c \
+@SO_WITH_STATIC_LIB_FALSE@../include/sfPolicyUserData.c
+
 libsf_dce2_preproc_la_SOURCES = includes/dcerpc.h includes/smb.h \
 	dce2_debug.c dce2_debug.h dce2_utils.c dce2_utils.h \
 	dce2_list.c dce2_list.h dce2_memory.c dce2_memory.h \
@@ -379,9 +369,8 @@ libsf_dce2_preproc_la_SOURCES = includes/dcerpc.h includes/smb.h \
 	dce2_smb.c dce2_smb.h dce2_smb2.c dce2_smb2.h dce2_tcp.c \
 	dce2_tcp.h dce2_co.c dce2_co.h dce2_udp.c dce2_udp.h dce2_cl.c \
 	dce2_cl.h dce2_http.c dce2_http.h dce2_paf.c dce2_paf.h \
-	$(am__append_3)
+	$(am__append_1)
 EXTRA_DIST = \
-sf_dce2.vcxproj \
 sf_dce2.dsp
 
 all: all-am
@@ -486,24 +475,6 @@ sfrt_dir.lo: ../include/sfrt_dir.c
 
 sfPolicyUserData.lo: ../include/sfPolicyUserData.c
 	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o sfPolicyUserData.lo `test -f '../include/sfPolicyUserData.c' || echo '$(srcdir)/'`../include/sfPolicyUserData.c
-
-appdata_adjuster.lo: ../include/appdata_adjuster.c
-	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o appdata_adjuster.lo `test -f '../include/appdata_adjuster.c' || echo '$(srcdir)/'`../include/appdata_adjuster.c
-
-sfxhash.lo: ../include/sfxhash.c
-	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o sfxhash.lo `test -f '../include/sfxhash.c' || echo '$(srcdir)/'`../include/sfxhash.c
-
-sfhashfcn.lo: ../include/sfhashfcn.c
-	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o sfhashfcn.lo `test -f '../include/sfhashfcn.c' || echo '$(srcdir)/'`../include/sfhashfcn.c
-
-sfmemcap.lo: ../include/sfmemcap.c
-	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o sfmemcap.lo `test -f '../include/sfmemcap.c' || echo '$(srcdir)/'`../include/sfmemcap.c
-
-sfprimetable.lo: ../include/sfprimetable.c
-	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o sfprimetable.lo `test -f '../include/sfprimetable.c' || echo '$(srcdir)/'`../include/sfprimetable.c
-
-reg_test.lo: ../include/reg_test.c
-	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o reg_test.lo `test -f '../include/reg_test.c' || echo '$(srcdir)/'`../include/reg_test.c
 
 mostlyclean-libtool:
 	-rm -f *.lo

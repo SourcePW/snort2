@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2009-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -25,7 +25,6 @@
 #include "stdint.h"
 #include "stdbool.h"
 #include "ipv6_port.h"
-#include "sfghash.h"
 
 struct AppIdData;
 
@@ -94,12 +93,10 @@ typedef int32_t tAppId;
 #define APPID_SESSION_IGNORE_FLOW           (1ULL << 39)
 #define APPID_SESSION_IGNORE_FLOW_LOGGED    (1ULL << 40)
 
-#define APPID_SESSION_EXPECTED_EVALUATE     (1ULL << 41)
-#define APPID_SESSION_HOST_CACHE_MATCHED    (1ULL << 42)
-#define APPID_SESSION_OOO_CHECK_TP          (1ULL << 43)
+#define APPID_SESSION_OOO_LOGGED            (1ULL << 41)
+#define APPID_SESSION_TPI_OOO_LOGGED        (1ULL << 42)
 
-#define APPID_SESSION_HTTP_TUNNEL           (1ULL << 44)
-#define APPID_SESSION_HTTP_CONNECT          (1ULL << 45)
+#define APPID_SESSION_EXPECTED_EVALUATE     (1ULL << 43)
 
 #define APPID_SESSION_IGNORE_ID_FLAGS       (APPID_SESSION_IGNORE_FLOW | \
                                              APPID_SESSION_NOT_A_SERVICE | \
@@ -155,10 +152,6 @@ typedef struct _FpSMBData
 
 //maximum number of appIds replicated for a flow/session
 #define APPID_HA_SESSION_APP_NUM_MAX 8
-#define APPID_HA_FLAGS_APP (1<<0)
-#define APPID_HA_FLAGS_TP_DONE (1<<1)
-#define APPID_HA_FLAGS_SVC_DONE (1<<2)
-#define APPID_HA_FLAGS_HTTP (1<<3)
 
 typedef struct _AppIdSessionHA
 {
@@ -208,7 +201,6 @@ struct AppIdApi
     tAppId (*getFwClientAppId)(struct AppIdData *session);
     tAppId (*getFwPayloadAppId)(struct AppIdData *session);
     tAppId (*getFwReferredAppId)(struct AppIdData *session);
-    SFGHASH*(*getFwMultiPayloadList)(struct AppIdData *session);
 
     bool (*isSessionSslDecrypted)(struct AppIdData *session);
     bool (*isAppIdInspectingSession)(struct AppIdData *session);
@@ -255,29 +247,23 @@ struct AppIdApi
     void (*freeSmbFpData)(struct AppIdData *session, FpSMBData *data);
     char* (*getNetbiosName)(struct AppIdData *session);
     uint32_t (*produceHAState)(void *lwssn, uint8_t *buf);
-    uint32_t (*consumeHAState)(void *lwssn, const uint8_t *buf, uint8_t length, uint8_t proto, const struct in6_addr* ip, uint16_t initiatorPort);
+    uint32_t (*consumeHAState)(void *lwssn, const uint8_t *buf, uint8_t length, uint8_t proto, struct in6_addr* ip, uint16_t initiatorPort); 
     struct AppIdData * (*getAppIdData)(void *lwssn);
-    int (*getAppIdSessionPacketCount)(struct AppIdData *appIdData);
 
-    char* (*getDNSQuery)(struct AppIdData *appIdData, uint8_t *query_len, bool *got_response);
+    char* (*getDNSQuery)(struct AppIdData *appIdData, uint8_t *query_len);
     uint16_t (*getDNSQueryoffset)(struct AppIdData *appIdData);
     uint16_t (*getDNSRecordType)(struct AppIdData *appIdData);
     uint8_t (*getDNSResponseType)(struct AppIdData *appIdData);
     uint32_t (*getDNSTTL)(struct AppIdData *appIdData);
-    uint16_t (*getDNSOptionsOffset)(struct AppIdData *appIdData);
     char* (*getHttpNewField)(struct AppIdData *session, HTTP_FIELD_ID fieldId);
     void (*freeHttpNewField)(struct AppIdData *appIdData, HTTP_FIELD_ID fieldId);
     uint16_t (*getHttpFieldOffset)(struct AppIdData *session, HTTP_FIELD_ID fieldId);
     uint16_t (*getHttpFieldEndOffset)(struct AppIdData *session, HTTP_FIELD_ID fieldId);
-    bool (*isHttpInspectionDone)(struct AppIdData *session);
-    void (*dumpDebugHostInfo)(void);
 };
 
 /* For access when including header */
 extern struct AppIdApi appIdApi;
 
-//#define UNIT_TESTING // NOTE These testing #define's are used in service_base.c and fw_appid.c
-//#define UNIT_TEST_FIRST_DECRYPTED_PACKET 12 // WARNING this assumes a single stream in a decrypted pcap
 
 #endif  /* __APPID_API_H__ */
 

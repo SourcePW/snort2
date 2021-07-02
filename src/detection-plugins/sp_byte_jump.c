@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
- ** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ ** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  ** Copyright (C) 2002-2013 Sourcefire, Inc.
  ** Author: Martin Roesch
  **
@@ -425,10 +425,15 @@ static ByteJumpOverrideData * ByteJumpParse(char *data, ByteJumpData *idx, OptTr
     }
     else
     {
-        idx->offset_var = find_value(toks[1]);
-        if (idx->offset_var == BYTE_EXTRACT_NO_VAR)
+        if ( bytemath_variable_name && (strcmp(bytemath_variable_name,toks[1]) == 0) )
         {
-            ParseError(BYTE_JUMP_INVALID_ERR_FMT, "byte_jump : offset", toks[1]);
+              idx->offset_var= BYTE_MATH_VAR_INDEX;  // 2
+        }
+        else
+        {
+              idx->offset_var = GetVarByName(toks[1]);
+              if ( idx->offset_var == BYTE_EXTRACT_NO_VAR)
+                   ParseError(BYTE_JUMP_INVALID_ERR_FMT, "byte_jump : offset", toks[1]);
         }
     }
 
@@ -530,10 +535,15 @@ static ByteJumpOverrideData * ByteJumpParse(char *data, ByteJumpData *idx, OptTr
                   }
                   else
                   {
-                      idx->postoffset_var = find_value(mval);
-                      if ( idx->postoffset_var == BYTE_EXTRACT_NO_VAR)
+                      if ( bytemath_variable_name && (strcmp(bytemath_variable_name,mval) == 0) )
                       {
-                          ParseError(BYTE_JUMP_INVALID_ERR_FMT, "byte_jump : post_offset", mval);
+                          idx->postoffset_var= BYTE_MATH_VAR_INDEX;
+                      }
+                      else
+                      {
+                         idx->postoffset_var = GetVarByName(mval);
+                         if ( idx->postoffset_var == BYTE_EXTRACT_NO_VAR)
+                         ParseError(BYTE_JUMP_INVALID_ERR_FMT, "byte_jump : post_offset", mval);
                       }
                   }
                }
@@ -670,12 +680,7 @@ int ByteJump(void *option_data, Packet *p)
          {
               bjd->offset = (int32_t) bytemath_variable;
          }
-
-         else if(bjd->offset_var ==  COMMON_VAR_INDEX )
-         {
-              bjd->offset = (int32_t) common_var;
-         }
-         else if ( bjd->offset_var < NUM_BYTE_EXTRACT_VARS)
+         if ( bjd->offset_var < NUM_BYTE_EXTRACT_VARS)
          {
               GetByteExtractValue(&extract_offset, bjd->offset_var);
               bjd->offset = (int32_t) extract_offset;
@@ -846,12 +851,7 @@ int ByteJump(void *option_data, Packet *p)
         {
              bjd->post_offset = (int32_t) bytemath_variable;
         }
-
-        else if(bjd->postoffset_var == COMMON_VAR_INDEX)
-        {
-             bjd->post_offset = (int32_t) common_var;
-        }
-        else if (bjd->postoffset_var < NUM_BYTE_EXTRACT_VARS)
+        if (bjd->postoffset_var < NUM_BYTE_EXTRACT_VARS)
         {
              GetByteExtractValue(&extract_postoffset, bjd->postoffset_var);
              bjd->post_offset = (int32_t) extract_postoffset;

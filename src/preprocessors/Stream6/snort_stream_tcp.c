@@ -1,7 +1,7 @@
 /* $Id$ */
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2005-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -66,7 +66,6 @@
 #include "generators.h"
 #include "event_queue.h"
 #include "snort.h"
-#include "memory_stats.h"
 #include "parser/IpAddrSet.h"
 
 #include "decode.h"
@@ -77,7 +76,6 @@
 
 #include "sf_sdlist.h"
 
-#include "spp_session.h"
 #include "session_api.h"
 #include "snort_session.h"
 
@@ -104,11 +102,6 @@
 #include "detection_util.h"
 #include "file_api.h"
 
-#ifdef REG_TEST
-#include "reg_test.h"
-#include <stdio.h>
-#endif
-
 // port reassembly registration utils
 static void StreamCreateReassemblyPortList( void );
 static void StreamDestoryReassemblyPortList( void );
@@ -127,6 +120,7 @@ PreprocStats s5TcpProcessRebuiltPerfStats;
 PreprocStats streamSizePerfStats;
 PreprocStats streamReassembleRuleOptionPerfStats;
 extern PreprocStats preprocRuleOptionPerfStats;
+
 
 #endif
 
@@ -165,7 +159,7 @@ extern PreprocStats preprocRuleOptionPerfStats;
 #endif
 
 #define PAWS_WINDOW         60
-#define PAWS_24DAYS         2147483647  /*  2^ 31 -1 - approx 24 days in milli secs*/
+#define PAWS_24DAYS         2073600         /* 24 days in seconds */
 
 /* for state transition queuing */
 #define CHK_SEQ         0
@@ -275,9 +269,6 @@ extern PreprocStats preprocRuleOptionPerfStats;
 #define tcp_client_port scb->client_port
 #define tcp_server_ip scb->server_ip
 #define tcp_server_port scb->server_port
-
-static uint32_t pkt_snaplen = 0;
-#define PKT_SNAPLEN 1514
 
 /*  D A T A  S T R U C T U R E S  ***********************************/
 typedef struct _TcpDataBlock
@@ -395,7 +386,6 @@ typedef struct _StreamTracker
     // TBD move out of here since only used per packet?
     StreamSegment* seglist_next;  /* next queued segment to flush */
 
-    StreamSegment *held_segment;  /* blocked segment of http connection */
 #ifdef DEBUG
     int segment_ordinal;
 #endif
@@ -457,19 +447,13 @@ typedef struct _TcpSession
     int32_t egress_group;   /* Index of the outbound group. */
     uint32_t daq_flags;     /* Flags for the packet (DAQ_PKT_FLAG_*) */
     void *priv_ptr;         /* private data pointer. used in pinhole */
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-    uint16_t address_space_id_src;
-    uint16_t address_space_id_dst;
-#else
     uint16_t address_space_id;
-#endif
 #ifdef HAVE_DAQ_FLOW_ID
     uint32_t daq_flow_id;
 #endif
 #endif
     uint8_t ecn;
     bool session_decrypted;
-    uint8_t pp_flags;
 } TcpSession;
 
 #define SL_BUF_FLUSHED 1
@@ -483,7 +467,7 @@ static inline int Stream_NormGetMode(uint16_t reassembly_policy, const SnortConf
 {
     if ( reassembly_policy == REASSEMBLY_POLICY_NOACK )
         return NORM_MODE_OFF;
-    return Normalize_GetMode(sc, nf);
+    return Normalize_GetMode(snort_conf, nf);
 }
 
 static inline uint32_t SegsToFlush (const StreamTracker* st, unsigned max)
@@ -522,7 +506,7 @@ static inline bool DataToFlush (const StreamTracker* st)
         return ( SegsToFlush(st, 1) > 0 );
 
 #ifdef NORMALIZER
-    if ((st->flush_mgr.flush_policy == STREAM_FLPOLICY_FOOTPRINT_IPS) || (st->flush_mgr.flush_policy == STREAM_FLPOLICY_FOOTPRINT_IPS_FTP))
+    if ( st->flush_mgr.flush_policy == STREAM_FLPOLICY_FOOTPRINT_IPS )
         return ( SegsToFlush(st, 1) > 1 );
 #endif
 
@@ -562,7 +546,7 @@ static void StreamPrintTcpConfig(StreamTcpPolicy *);
 static void StreamInitPacket();
 static inline void SetupTcpDataBlock(TcpDataBlock *, Packet *);
 static int ProcessTcp(SessionControlBlock *, Packet *, TcpDataBlock *,
-        StreamTcpPolicy *, SFXHASH_NODE *);
+        StreamTcpPolicy *);
 #if OLD_CODE_NOLONGER_USED_DEPENDS_ON_CURRENT_STATE
 static inline void QueueState(uint8_t, StreamTracker*, uint8_t,
         uint32_t, uint8_t);
@@ -614,12 +598,10 @@ static inline void ResetFlushMgrs(void);
 static void targetPolicyIterate(void (*callback)(int));
 static void policyDecoderFlagsSaveNClear(int policyId);
 static void policyDecoderFlagsRestore(int policyId);
-static void policyChecksumFlagsSaveNClear(int policyId);
-static void policyChecksumFlagsRestore(int policyId);
 static inline uint16_t GetTcpReassemblyPolicy(int os_policy);
 
 /*  G L O B A L S  **************************************************/
-static SessionCache* tcp_lws_cache = NULL;
+void *tcp_lws_cache = NULL;
 static Packet *s5_pkt = NULL;
 static Packet *tcp_cleanup_pkt = NULL;
 static const uint8_t *s5_pkt_end = NULL;
@@ -678,7 +660,6 @@ static char *flush_policy_names[] = {
     "Protocol-IPS",
     "Footprint-NOACK",
     "Protocol-NOACK",
-    "Footprint-IPS-FTP",
     "Disabled"
 };
 
@@ -725,8 +706,7 @@ static inline void InitFlushPointList(FlushPointList *flush_point_list, uint32_t
 #ifndef DYNAMIC_RANDOM_FLUSH_POINTS
         flush_point_list->current = 0;
 
-        flush_point_list->flush_points = SnortPreprocAlloc(RAND_FLUSH_POINTS, sizeof(uint32_t),
-                                                 PP_STREAM, PP_MEM_CATEGORY_CONFIG);
+        flush_point_list->flush_points = SnortAlloc(sizeof(uint32_t) * RAND_FLUSH_POINTS);
         for (i=0;i<RAND_FLUSH_POINTS;i++)
         {
             if (snort_conf->run_flags & RUN_FLAG__STATIC_HASH)
@@ -752,7 +732,7 @@ static inline void InitFlushPointList(FlushPointList *flush_point_list, uint32_t
     }
 }
 
-static inline void UpdateFlushMgr( SnortConfig *sc,
+static inline void UpdateFlushMgr(
         FlushMgr *mgr, FlushPointList *flush_point_list, uint32_t flags)
 {
     if ( mgr->flush_type == STREAM_FT_EXTERNAL )
@@ -774,7 +754,6 @@ static inline void UpdateFlushMgr( SnortConfig *sc,
 
 #ifdef NORMALIZER
         case STREAM_FLPOLICY_FOOTPRINT_IPS:
-        case STREAM_FLPOLICY_FOOTPRINT_IPS_FTP:
             break;
 
         case STREAM_FLPOLICY_PROTOCOL_IPS:
@@ -813,18 +792,14 @@ static inline void UpdateFlushMgr( SnortConfig *sc,
         flush_point_list->current = (flush_point_list->current+1) % RAND_FLUSH_POINTS;
     }
 #endif
-    //Do not reset the last_size for FTP flush policy
-    if(mgr->flush_policy != STREAM_FLPOLICY_FOOTPRINT_IPS_FTP)
-    {
-        mgr->last_size = 0;
-        mgr->last_count = 0;
-    }
+    mgr->last_size = 0;
+    mgr->last_count = 0;
 
     if ( mgr->flush_type == STREAM_FT_PAF_MAX )
-        mgr->flush_pt += ScPafMaxNewConf(sc);
+        mgr->flush_pt += ScPafMax();
 }
 
-static inline void InitFlushMgr( SnortConfig *sc, FlushMgr *mgr, FlushPointList *flush_point_list,
+static inline void InitFlushMgr( FlushMgr *mgr, FlushPointList *flush_point_list,
         uint8_t policy, uint8_t auto_disable)
 {
     // if policy is to disable reassembly just set policy in flush manager and
@@ -844,10 +819,10 @@ static inline void InitFlushMgr( SnortConfig *sc, FlushMgr *mgr, FlushPointList 
     mgr->flush_type = STREAM_FT_INTERNAL;
     mgr->auto_disable = auto_disable;
 
-    UpdateFlushMgr(sc, mgr, flush_point_list, 0);
+    UpdateFlushMgr(mgr, flush_point_list, 0);
 
 #ifdef NORMALIZER
-    if ( Normalize_GetMode(sc, NORM_TCP_IPS) == NORM_MODE_ON)
+    if ( Normalize_GetMode(snort_conf, NORM_TCP_IPS) == NORM_MODE_ON)
     {
         if ( policy == STREAM_FLPOLICY_FOOTPRINT )
             mgr->flush_policy = STREAM_FLPOLICY_FOOTPRINT_IPS;
@@ -891,7 +866,7 @@ static inline void InitFlushMgrByPort (
         s5_paf_setup(&pst->paf_state, registration);
         auto_disable = !flush;
     }
-    InitFlushMgr(snort_conf, &pst->flush_mgr,
+    InitFlushMgr(&pst->flush_mgr,
             &pst->tcp_policy->flush_point_list, flush_policy, auto_disable);
 }
 
@@ -920,7 +895,7 @@ static inline void InitFlushMgrByService (
         s5_paf_setup(&pst->paf_state, registration);
         auto_disable = !flush;
     }
-    InitFlushMgr(snort_conf, &pst->flush_mgr,
+    InitFlushMgr(&pst->flush_mgr,
             &pst->tcp_policy->flush_point_list, flush_policy, auto_disable);
 }
 
@@ -951,11 +926,11 @@ static int ResetFlushMgrsPolicy(
         {
             client = &policy->flush_config[j].client;
             flush_policy = policy->flush_config[j].client.flush_policy;
-            InitFlushMgr(snort_conf, client, fpl, flush_policy, 0);
+            InitFlushMgr(client, fpl, flush_policy, 0);
 
             server = &policy->flush_config[j].server;
             flush_policy = policy->flush_config[j].server.flush_policy;
-            InitFlushMgr(snort_conf, server, fpl, flush_policy, 0);
+            InitFlushMgr(server, fpl, flush_policy, 0);
         }
 #ifdef TARGET_BASED
         /* protocol 0 is the unknown case. skip it */
@@ -963,11 +938,11 @@ static int ResetFlushMgrsPolicy(
         {
             client = &policy->flush_config_protocol[j].client;
             flush_policy = policy->flush_config_protocol[j].client.flush_policy;
-            InitFlushMgr(snort_conf, client, fpl, flush_policy, 0);
+            InitFlushMgr(client, fpl, flush_policy, 0);
 
             server = &policy->flush_config_protocol[j].server;
             flush_policy = policy->flush_config_protocol[j].server.flush_policy;
-            InitFlushMgr(snort_conf, server, fpl, flush_policy, 0);
+            InitFlushMgr(server, fpl, flush_policy, 0);
         }
 #endif
     }
@@ -1196,7 +1171,6 @@ void StreamSetSessionDecryptedTcp( SessionControlBlock *scb, bool enable )
     if((SegsToFlush(&tcpssn->server, 1) > 0) || (SegsToFlush(&tcpssn->client, 1) > 0))
     {
         FlushQueuedSegs(scb, tcpssn);
-        Active_Reset();
     }
 
     tcpssn->session_decrypted = enable;
@@ -1217,25 +1191,10 @@ bool StreamIsSessionDecryptedTcp( SessionControlBlock *scb )
     return ( tcpssn->session_decrypted == true );
 }
 
-uint32_t StreamGetPreprocFlagsTcp(SessionControlBlock *scb)
-{
-    TcpSession *tcpssn;
-
-    if( !scb->proto_specific_data )
-        return 0;
-
-    tcpssn = ( TcpSession * ) scb->proto_specific_data->data;
-
-    if ( !tcpssn )
-        return 0;
-
-    return tcpssn->pp_flags;
-}
-
 //-------------------------------------------------------------------------
 // tcp ha stuff
 
-#ifdef ENABLE_HA
+
 static SessionControlBlock *StreamTCPCreateSession( const SessionKey *key )
 {
     setNapRuntimePolicy( getDefaultPolicy() );
@@ -1265,17 +1224,13 @@ static int StreamTCPDeleteSession( const SessionKey *key )
     if( scb != NULL )
     {
         if( StreamSetRuntimeConfiguration( scb, scb->protocol ) == 0 )
-        {
-            if (!session_api->delete_session( tcp_lws_cache, scb, "ha sync", false ))
-               s5stats.active_tcp_sessions--;
-        }
+            session_api->delete_session( tcp_lws_cache, scb, "ha sync" );
         else
             WarningMessage(" WARNING: Attempt to delete a TCP Session when no valid runtime configuration.\n" );
     }
 
     return 0;
 }
-#endif
 
 SessionControlBlock *GetLWTcpSession( const SessionKey *key )
 {
@@ -1348,8 +1303,6 @@ void StreamInitTcp( void )
 #ifdef ENABLE_HA
     ha_set_api( IPPROTO_TCP, &ha_tcp_api );
 #endif
-
-    pkt_snaplen = (snort_conf->pkt_snaplen > 0) ? snort_conf->pkt_snaplen : PKT_SNAPLEN;
 }
 
 void StreamTcpRegisterPreprocProfiles( void )
@@ -1414,21 +1367,16 @@ static void addStreamTcpPolicyToList( StreamTcpConfig *config, StreamTcpPolicy *
     /* Now add this context to the internal list */
     if( config->policy_list == NULL )
     {
-        config->policy_list = ( StreamTcpPolicy ** ) SnortPreprocAlloc(1,
-                             sizeof( StreamTcpPolicy * ), PP_STREAM,
-                             PP_MEM_CATEGORY_CONFIG);
+        config->policy_list = ( StreamTcpPolicy ** ) SnortAlloc( sizeof( StreamTcpPolicy * ) );
     }
     else
     {
         uint32_t policyListSize = sizeof( StreamTcpPolicy * ) * ( config->num_policies );
-        StreamTcpPolicy **tmpPolicyList = ( StreamTcpPolicy ** ) SnortPreprocAlloc(1, 
-                                              policyListSize, PP_STREAM,
-                                              PP_MEM_CATEGORY_CONFIG);
+        StreamTcpPolicy **tmpPolicyList = ( StreamTcpPolicy ** ) SnortAlloc( policyListSize );
 
         // copy the existing policies to new list, free old list and point to new...
         memcpy( tmpPolicyList, config->policy_list, policyListSize - sizeof( StreamTcpPolicy * ) );
-        SnortPreprocFree( config->policy_list, sizeof( StreamTcpPolicy * ), PP_STREAM,
-                         PP_MEM_CATEGORY_CONFIG );
+        free( config->policy_list );
         config->policy_list = tmpPolicyList;
     }
 
@@ -1438,9 +1386,7 @@ static void addStreamTcpPolicyToList( StreamTcpConfig *config, StreamTcpPolicy *
 
 StreamTcpPolicy *initTcpPolicyInstance( void )
 {
-    StreamTcpPolicy *tcp_policy = (StreamTcpPolicy *) SnortPreprocAlloc(1,
-                                          sizeof(StreamTcpPolicy), PP_STREAM, 
-                                          PP_MEM_CATEGORY_CONFIG);
+    StreamTcpPolicy *tcp_policy = (StreamTcpPolicy *) SnortAlloc(sizeof(StreamTcpPolicy));
 
     /* Initialize flush policy to Ignore */
     memcpy(&tcp_policy->flush_config, ignore_flush_policy,
@@ -1453,8 +1399,9 @@ StreamTcpPolicy *initTcpPolicyInstance( void )
     return tcp_policy;
 }
 
-StreamTcpPolicy *StreamTcpPolicyClone( StreamTcpPolicy *master, StreamConfig *config )
+StreamTcpPolicy *StreamTcpPolicyClone( StreamTcpPolicy *master )
 {
+    StreamConfig *config;
     StreamTcpPolicy *clone = initTcpPolicyInstance( );
 
     clone->policy = master->policy;
@@ -1471,6 +1418,7 @@ StreamTcpPolicy *StreamTcpPolicyClone( StreamTcpPolicy *master, StreamConfig *co
     clone->max_consec_small_seg_size = master->max_consec_small_seg_size;
     memcpy(clone->small_seg_ignore, master->small_seg_ignore, sizeof(master->small_seg_ignore));
 
+    config = (StreamConfig *) sfPolicyUserDataGet(stream_online_config, getParserPolicy( snort_conf ));
     addStreamTcpPolicyToList( config->tcp_config, clone );
 
     return clone;
@@ -1490,7 +1438,7 @@ void StreamTcpPolicyInit(struct _SnortConfig *sc, StreamTcpConfig *config, char 
     StreamParseTcpArgs(sc, config, args, s5TcpPolicy);
     addStreamTcpPolicyToList( config, s5TcpPolicy );
 
-    if ( ScPafEnabledNewConf(sc) && !config->paf_config )
+    if ( ScPafEnabled() && !config->paf_config )
         config->paf_config = s5_paf_new();
 
     // register callback with Session that determines direction and client/server ports
@@ -2078,13 +2026,13 @@ static void StreamParseTcpArgs(struct _SnortConfig *sc, StreamTcpConfig *config,
                             {
                                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config[j].client;
                                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                                InitFlushMgr(sc, flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
+                                InitFlushMgr(flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
                             }
                             if (reassembly_direction & SSN_DIR_FROM_SERVER)
                             {
                                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config[j].server;
                                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                                InitFlushMgr(sc, flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
+                                InitFlushMgr(flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
                             }
                         }
                     }
@@ -2146,13 +2094,13 @@ static void StreamParseTcpArgs(struct _SnortConfig *sc, StreamTcpConfig *config,
                             {
                                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config[port].client;
                                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                                InitFlushMgr(sc, flush_mgr, flush_point_list, flush_policy, 0);
+                                InitFlushMgr(flush_mgr, flush_point_list, flush_policy, 0);
                             }
                             if (reassembly_direction & SSN_DIR_FROM_SERVER)
                             {
                                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config[port].server;
                                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                                InitFlushMgr(sc, flush_mgr, flush_point_list, flush_policy, 0);
+                                InitFlushMgr(flush_mgr, flush_point_list, flush_policy, 0);
                             }
                         }
                         mSplitFree(&ptoks, num_ptoks);
@@ -2205,13 +2153,13 @@ static void StreamParseTcpArgs(struct _SnortConfig *sc, StreamTcpConfig *config,
                             {
                                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config_protocol[j].client;
                                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                                InitFlushMgr(sc, flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
+                                InitFlushMgr(flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
                             }
                             if (reassembly_direction & SSN_DIR_FROM_SERVER)
                             {
                                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config_protocol[j].server;
                                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                                InitFlushMgr(sc, flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
+                                InitFlushMgr(flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
                             }
                             s5TcpPolicy->flush_config_protocol[j].configured = 1;
                         }
@@ -2262,13 +2210,13 @@ static void StreamParseTcpArgs(struct _SnortConfig *sc, StreamTcpConfig *config,
                             {
                                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config_protocol[proto_ordinal].client;
                                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                                InitFlushMgr(sc, flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
+                                InitFlushMgr(flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
                             }
                             if (reassembly_direction & SSN_DIR_FROM_SERVER)
                             {
                                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config_protocol[proto_ordinal].server;
                                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                                InitFlushMgr(sc, flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
+                                InitFlushMgr(flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
                             }
                             s5TcpPolicy->flush_config_protocol[proto_ordinal].configured = 1;
                         }
@@ -2326,13 +2274,13 @@ static void StreamParseTcpArgs(struct _SnortConfig *sc, StreamTcpConfig *config,
             {
                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config[default_ports[i]].client;
                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                InitFlushMgr(sc, flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
+                InitFlushMgr(flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
             }
             if (reassembly_direction & SSN_DIR_FROM_SERVER)
             {
                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config[default_ports[i]].server;
                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                InitFlushMgr(sc, flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
+                InitFlushMgr(flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
             }
         }
     }
@@ -2362,13 +2310,13 @@ static void StreamParseTcpArgs(struct _SnortConfig *sc, StreamTcpConfig *config,
             {
                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config_protocol[app_id].client;
                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                InitFlushMgr(sc, flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
+                InitFlushMgr(flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
             }
             if (reassembly_direction & SSN_DIR_FROM_SERVER)
             {
                 FlushMgr *flush_mgr = &s5TcpPolicy->flush_config_protocol[app_id].server;
                 FlushPointList *flush_point_list = &s5TcpPolicy->flush_point_list;
-                InitFlushMgr(sc, flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
+                InitFlushMgr(flush_mgr, flush_point_list, STREAM_FLPOLICY_FOOTPRINT, 0);
             }
             s5TcpPolicy->flush_config_protocol[app_id].configured = 1;
         }
@@ -2650,23 +2598,18 @@ void StreamTcpConfigFree(StreamTcpConfig *config)
     {
         StreamTcpPolicy *policy = config->policy_list[i];
 
-        SnortPreprocFree(policy->flush_point_list.flush_points,
-                 sizeof(uint32_t) * RAND_FLUSH_POINTS, PP_STREAM,
-                 PP_MEM_CATEGORY_CONFIG);
+        free(policy->flush_point_list.flush_points);
 
         if (policy->bound_addrs != NULL)
             sfvar_free(policy->bound_addrs);
-        SnortPreprocFree(policy, sizeof( StreamTcpPolicy * ), PP_STREAM,
-              PP_MEM_CATEGORY_CONFIG);
+        free(policy);
     }
 
     if ( config->paf_config )
         s5_paf_delete(config->paf_config);
 
-    SnortPreprocFree(config->policy_list, 
-           sizeof(StreamTcpPolicy *) * (config->num_policies), PP_STREAM,
-           PP_MEM_CATEGORY_CONFIG);
-    SnortPreprocFree(config, sizeof(StreamTcpConfig), PP_STREAM, PP_MEM_CATEGORY_CONFIG);
+    free(config->policy_list);
+    free(config);
 }
 
 #ifdef STREAM_DEBUG_ENABLED
@@ -3140,6 +3083,7 @@ typedef enum {
     PC_TCP_TRIM_RST,
     PC_TCP_TRIM_WIN,
     PC_TCP_TRIM_MSS,
+    PC_FTP_TRIM_DATA,
     PC_MAX
 } PegCounts;
 
@@ -3154,6 +3098,7 @@ static const char* pegName[PC_MAX] = {
     "tcp::trim_rst",
     "tcp::trim_win",
     "tcp::trim_mss",
+    "ftp::trim_data",
 };
 
 void Stream_PrintNormalizationStats (void)
@@ -3192,13 +3137,6 @@ static inline bool NormalDropPacket (Packet* p)
             if ( mode == NORM_MODE_ON )
             {
                 Active_NapDropPacket(p);
-                if (pkt_trace_enabled)
-                {
-                    addPktTraceData(VERDICT_REASON_STREAM, snprintf(trace_line, MAX_TRACE_LINE,
-                       "Stream: TCP normalization error in timestamp, window, seq, ack, fin, flags, or unexpected data, %s\n",
-                       getPktTraceActMsg()));
-                }
-                else addPktTraceData(VERDICT_REASON_STREAM, 0);
                 return true;
             }
     }
@@ -3458,12 +3396,7 @@ static inline void SetPacketHeaderFoo (TcpSession* tcpssn, const Packet* p)
     tcpssn->daq_flow_id = p->pkth->flow_id;
 #endif
     tcpssn->daq_flags = p->pkth->flags;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-    tcpssn->address_space_id_dst = p->pkth->address_space_id_dst;
-    tcpssn->address_space_id_src = p->pkth->address_space_id_src;
-#else
     tcpssn->address_space_id = p->pkth->address_space_id;
-#endif
 }
 
 static inline void GetPacketHeaderFoo (
@@ -3489,19 +3422,7 @@ static inline void GetPacketHeaderFoo (
 #endif
     pkth->flags = tcpssn->daq_flags;
     pkth->priv_ptr = tcpssn->priv_ptr;
-#if !defined(SFLINUX) && defined(DAQ_CAPA_VRF)
-    pkth->address_space_id_dst = tcpssn->address_space_id_dst;
-    pkth->address_space_id_src = tcpssn->address_space_id_src;
-#else
     pkth->address_space_id = tcpssn->address_space_id;
-#endif
-#if defined(DAQ_VERSION) && DAQ_VERSION > 8
-    pkth->proto = phdr->proto;
-#endif
-
-#if !defined(SFLINUX) && defined(DAQ_CAPA_CARRIER_ID) && defined(DAQ_VERSION) && DAQ_VERSION > 10
-    pkth->carrier_id = phdr->carrier_id;
-#endif
 
 #ifdef HAVE_DAQ_REAL_ADDRESSES
     if (phdr->flags & DAQ_PKT_FLAG_REAL_ADDRESSES)
@@ -3765,7 +3686,7 @@ static inline int ValidTimestamp(StreamTracker *talker, StreamTracker *listener,
                 }
                 else
 #endif
-                if( (talker->ts_last != 0) && result < 0)
+                if(result < 0)
                 {
                     STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                                 "Packet outside PAWS window, dropping\n"););
@@ -3820,14 +3741,8 @@ static inline int ValidTimestamp(StreamTracker *talker, StreamTracker *listener,
             !TCP_ISFLAGSET(p->tcph, TH_ACK) )
     {
         *got_ts = StreamGetTcpTimestamp(p, &tdb->ts, 0);
-        if ( *got_ts ) {
+        if ( *got_ts )
             talker->flags |= TF_TSTAMP;
-            // In case of SYN, there is no ts_last is 0
-            // set it to the current value, so that computation of 
-            // ts_last is correct for subsequent packets.
-            talker->ts_last = tdb->ts;
-            talker->ts_last_pkt = p->pkth->ts.tv_sec;
-        }
     }
     else
     {
@@ -3903,7 +3818,7 @@ static inline int ValidTimestamp(StreamTracker *talker, StreamTracker *listener,
 //                     or RCV.NXT =< SEG.SEQ+SEG.LEN-1 < RCV.NXT+RCV.WND
 //
 static inline int ValidSeq(
-        const Packet* p, SessionControlBlock *scb, StreamTracker *st, TcpDataBlock *tdb, bool *before_win_base)
+        const Packet* p, SessionControlBlock *scb, StreamTracker *st, TcpDataBlock *tdb)
 {
     uint32_t win = StreamGetWindow(scb, st, tdb);
 
@@ -3928,7 +3843,7 @@ static inline int ValidSeq(
 }
 #else
 static inline int ValidSeq(
-        const Packet* p, SessionControlBlock *scb, StreamTracker *st, TcpDataBlock *tdb, bool *before_win_base)
+        const Packet* p, SessionControlBlock *scb, StreamTracker *st, TcpDataBlock *tdb)
 {
     int right_ok;
     uint32_t left_seq;
@@ -3969,7 +3884,6 @@ static inline int ValidSeq(
     {
         STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                     "end_seq is before win_base\n"););
-        *before_win_base = true;
     }
     return 0;
 }
@@ -4026,6 +3940,10 @@ static inline void UpdateSsn(Packet* p, StreamTracker *rcv, StreamTracker *snd, 
     if (SEQ_GT(tdb->end_seq, snd->l_nxt_seq))
         snd->l_nxt_seq = tdb->end_seq;
 
+    if (!SEQ_EQ(snd->r_win_base, tdb->ack))
+    {
+        snd->small_seg_count = 0;
+    }
 #ifdef S5_PEDANTIC
     if ( SEQ_GT(tdb->ack, snd->r_win_base) &&
             SEQ_LEQ(tdb->ack, snd->r_nxt_ack) )
@@ -4053,6 +3971,8 @@ static inline void SetupTcpDataBlock(TcpDataBlock *tdb, Packet *p)
     if(p->tcph->th_flags & TH_SYN)
     {
         tdb->end_seq++;
+        if(!(p->tcph->th_flags & TH_ACK))
+            EventInternal(INTERNAL_EVENT_SYN_RECEIVED);
     }
     // don't bump end_seq for fin here
     // we will bump if/when fin is processed
@@ -4072,7 +3992,7 @@ static void SegmentFree (StreamSegment *seg)
         dropped += seg->caplen - 1;  // seg contains 1st byte
 
     session_mem_in_use -= dropped;
-    SnortPreprocFree(seg, dropped, PP_STREAM, PP_MEM_CATEGORY_SESSION);
+    free(seg);
     s5stats.tcp_streamsegs_released++;
 
     STREAM_DEBUG_WRAP( DebugMessage(DEBUG_STREAM_STATE,
@@ -4353,215 +4273,11 @@ static inline int _flush_to_seq_noack( TcpSession *tcpssn, StreamTracker *st, ui
     }
 
     if ( st->tcp_policy )
-        UpdateFlushMgr(snort_conf, &st->flush_mgr, &st->tcp_policy->flush_point_list, st->flags);
+        UpdateFlushMgr(&st->flush_mgr, &st->tcp_policy->flush_point_list, st->flags);
 
     /* tell them how many bytes we processed */
     PREPROC_PROFILE_END(s5TcpFlushPerfStats);
     return bytes_processed;
-}
-
-static inline unsigned int getSegmentFlushSize(
-        StreamTracker* st,
-        StreamSegment *ss,
-        uint32_t to_seq,
-        unsigned int flushBufSize
-        )
-{
-    unsigned int flushSize = ss->size;
-
-    //copy only till flush buffer gets full
-    if ( flushSize > flushBufSize )
-        flushSize = flushBufSize;
-
-    // copy only to flush point
-    if ( s5_paf_active(&st->paf_state) && SEQ_GT(ss->seq + flushSize, to_seq) )
-        flushSize = to_seq - ss->seq;
-
-    return flushSize;
-}
-
-static int PseudoFlushStream(
-   Packet* p, StreamTracker *st, uint32_t toSeq,
-   uint8_t *flushbuf, const uint8_t *flushbuf_end)
-{
-    StreamSegment *ss = NULL, *seglist;
-    uint16_t bytes_flushed = 0;
-    uint32_t flushbuf_size, bytes_to_copy;
-    int ret;
-    PROFILE_VARS;
-
-    if ( st->seglist == NULL || st->seglist_tail == NULL )
-        return -1;
-
-    PREPROC_PROFILE_START(s5TcpBuildPacketPerfStats);
-
-    // skip over previously pseudo flushed segments
-    seglist = st->seglist_next;
-
-    for(ss = seglist; ss && SEQ_LT(ss->seq,  toSeq); ss = ss->next)
-    {
-        flushbuf_size = flushbuf_end - flushbuf;
-        bytes_to_copy = getSegmentFlushSize(st, ss, toSeq, flushbuf_size);
-
-        STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
-                   "Copying %u bytes for pseudo flushing from %X\n",
-                   bytes_to_copy, ss->seq););
-
-        ret = SafeMemcpy(flushbuf, ss->payload,
-                    bytes_to_copy, flushbuf, flushbuf_end);
-
-        if (ret == SAFEMEM_ERROR)
-        {
-            STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
-                            "ERROR writing flushbuf while pseudo flushing."
-                            "Attempting to write flushbuf out of range!\n"););
-        }
-        else
-        {
-            flushbuf += bytes_to_copy;
-        }
-
-        bytes_flushed += bytes_to_copy;
-        if (ss->next)
-        {
-            st->seglist_next = ss->next;
-        }
-
-        if ( flushbuf >= flushbuf_end )
-            break;
-
-        if ( SEQ_EQ(ss->seq + bytes_to_copy,  toSeq) )
-            break;
-
-    }
-
-    PREPROC_PROFILE_END(s5TcpBuildPacketPerfStats);
-    return bytes_flushed;
-}
-
-static inline void pseudo_flush(
-TcpSession *tcpssn, StreamTracker *st, uint32_t bytes, Packet *p,
-        sfaddr_t* sip, sfaddr_t* dip, uint16_t sp, uint16_t dp, uint32_t dir)
-{
-    uint32_t start_seq;
-    uint32_t stop_seq;
-    uint32_t footprint = 0;
-    uint32_t bytes_processed = 0;
-    int32_t flushed_bytes;
-    StreamSegment *ss = NULL;
-
-#ifdef HAVE_DAQ_ADDRESS_SPACE_ID
-    DAQ_PktHdr_t pkth;
-#endif
-    EncodeFlags enc_flags = 0;
-    PROFILE_VARS;
-
-    if (!bytes)
-    {
-        STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
-               "No bytes to pseudo flush\n"););
-        return;
-    }
-    PREPROC_PROFILE_START(s5TcpFlushPerfStats);
-
-    if ( !p->packet_flags || (dir & p->packet_flags) )
-        enc_flags = ENC_FLAG_FWD;
-
-#ifdef HAVE_DAQ_ADDRESS_SPACE_ID
-    GetPacketHeaderFoo(tcpssn, p->pkth, enc_flags, &pkth, dir);
-    Encode_Format_With_DAQ_Info(enc_flags, p, s5_pkt, PSEUDO_PKT_TCP, &pkth, 0);
-#elif defined(HAVE_DAQ_ACQUIRE_WITH_META)
-    Encode_Format_With_DAQ_Info(enc_flags, p, s5_pkt, PSEUDO_PKT_TCP, 0);
-#else
-    Encode_Format(enc_flags, p, s5_pkt, PSEUDO_PKT_TCP);
-#endif
-
-    s5_pkt_end = s5_pkt->data + s5_pkt->max_dsize;
-
-    ss = st->seglist_next;
-    stop_seq = st->seglist_next->seq + bytes;
-    do
-    {
-        footprint = bytes;
-        if(footprint > s5_pkt->max_dsize)
-        {
-            /* this is as much as we can pack into a stream buffer */
-            footprint = s5_pkt->max_dsize;
-            stop_seq = st->seglist_next->seq + footprint;
-        }
-
-        STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
-                    "Attempting to pseudo flush %lu bytes\n", footprint););
-        /* Capture the seq of the first octet before flush changes the sequence numbers */
-        start_seq = htonl(st->seglist_next->seq);
-
-        /* setup the pseudopacket payload */
-        flushed_bytes = PseudoFlushStream(p, st, stop_seq, (uint8_t *)s5_pkt->data, s5_pkt_end);
-
-        if(flushed_bytes == -1)
-        {
-            STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
-                    "Failed to pseudo flush the stream\n"););
-            return;
-        }
-        if (flushed_bytes == 0)
-        {
-            /* No more ACK'd data... bail */
-            break;
-        }
-
-        bytes_processed += flushed_bytes;
-
-        ((TCPHdr *)s5_pkt->tcph)->th_seq = start_seq;
-        s5_pkt->packet_flags |= (PKT_REBUILT_STREAM|PKT_STREAM_EST);
-        s5_pkt->dsize = (uint16_t)flushed_bytes;
-
-        s5_pkt->packet_flags |= PKT_PDU_TAIL;
-        s5_pkt->packet_flags |= PKT_PSEUDO_FLUSH;
-
-        Encode_Update(s5_pkt);
-
-        if(IS_IP4(s5_pkt))
-        {
-            s5_pkt->inner_ip4h.ip_len = s5_pkt->iph->ip_len;
-        }
-        else
-        {
-            IP6RawHdr* ip6h = (IP6RawHdr*)s5_pkt->raw_ip6h;
-            if ( ip6h ) s5_pkt->inner_ip6h.len = ip6h->ip6plen;
-        }
-
-        ((DAQ_PktHdr_t*)s5_pkt->pkth)->ts.tv_sec = st->seglist_next->tv.tv_sec;
-        ((DAQ_PktHdr_t*)s5_pkt->pkth)->ts.tv_usec = st->seglist_next->tv.tv_usec;
-
-        s5_pkt->packet_flags |= dir;
-        s5_pkt->ssnptr = (void *) tcpssn->scb;
-#ifdef TARGET_BASED
-        s5_pkt->application_protocol_ordinal = p->application_protocol_ordinal;
-#endif
-        PREPROC_PROFILE_TMPEND(s5TcpFlushPerfStats);
-        {
-            int tmp_do_detect, tmp_do_detect_content;
-            PROFILE_VARS;
-
-            PREPROC_PROFILE_START(s5TcpProcessRebuiltPerfStats);
-            tmp_do_detect = do_detect;
-            tmp_do_detect_content = do_detect_content;
-
-            SnortEventqPush();
-            Preprocess(s5_pkt);
-            SnortEventqPop();
-            DetectReset(s5_pkt->data, s5_pkt->dsize);
-
-            do_detect = tmp_do_detect;
-            do_detect_content = tmp_do_detect_content;
-            PREPROC_PROFILE_END(s5TcpProcessRebuiltPerfStats);
-        }
-        PREPROC_PROFILE_TMPSTART(s5TcpFlushPerfStats);
-    } while(bytes_processed < bytes);
-
-    st->seglist_next = ss;
-    PREPROC_PROFILE_END(s5TcpFlushPerfStats);
 }
 
 static inline int _flush_to_seq (
@@ -4584,9 +4300,9 @@ static inline int _flush_to_seq (
     PREPROC_PROFILE_START(s5TcpFlushPerfStats);
 
     if(st->paf_state.fpt_eoh)
-        tcpssn->pp_flags |= PP_HTTPINSPECT_PAF_FLUSH_POST_HDR;
+        tcpssn->scb->proto_flags |= PROTO_HTTP_PAF_FLUSH_POST_HDR;
     else
-        tcpssn->pp_flags &= ~PP_HTTPINSPECT_PAF_FLUSH_POST_HDR;
+        tcpssn->scb->proto_flags &= ~PROTO_HTTP_PAF_FLUSH_POST_HDR;
 
     if ( !p->packet_flags || (dir & p->packet_flags) )
         enc_flags = ENC_FLAG_FWD;
@@ -4684,12 +4400,6 @@ static inline int _flush_to_seq (
 
         if ((p->packet_flags & PKT_PDU_TAIL))
             s5_pkt->packet_flags |= PKT_PDU_TAIL;
-        
-        /* Rebuilt packet with only and complete http-post header is set with PKT_EVAL_DROP, 
-         * it will be used to evalute drop/allow packet by preprocs  
-         */
-        if (tcpssn->pp_flags & PP_HTTPINSPECT_PAF_FLUSH_POST_HDR)
-            s5_pkt->packet_flags |= PKT_EVAL_DROP;
 
         Encode_Update(s5_pkt);
 
@@ -4754,7 +4464,7 @@ static inline int _flush_to_seq (
     } while ( DataToFlush(st) );
 
     if ( st->tcp_policy )
-        UpdateFlushMgr(snort_conf, &st->flush_mgr, &st->tcp_policy->flush_point_list, st->flags);
+        UpdateFlushMgr(&st->flush_mgr, &st->tcp_policy->flush_point_list, st->flags);
 
     /* tell them how many bytes we processed */
     PREPROC_PROFILE_END(s5TcpFlushPerfStats);
@@ -4869,12 +4579,6 @@ static inline int flush_to_seq(
     }
     st->flags &= ~TF_FIRST_PKT_MISSING;
 
-    if (p->packet_flags & PKT_PSEUDO_FLUSH)
-    {
-         pseudo_flush(tcpssn, st, bytes, p, sip, dip, sp, dp, dir);
-         return 0;
-    }
- 
     return _flush_to_seq(tcpssn, st, bytes, p, sip, dip, sp, dp, dir);
 
 }
@@ -4974,6 +4678,26 @@ static inline int flush_stream(
     return flush_ackd(tcpssn, st, p, sip, dip, sp, dp, dir);
 }
 
+static inline unsigned int getSegmentFlushSize(
+        StreamTracker* st,
+        StreamSegment *ss,
+        uint32_t to_seq,
+        unsigned int flushBufSize
+        )
+{
+    unsigned int flushSize = ss->size;
+
+    //copy only till flush buffer gets full
+    if ( flushSize > flushBufSize )
+        flushSize = flushBufSize;
+
+    // copy only to flush point
+    if ( s5_paf_active(&st->paf_state) && SEQ_GT(ss->seq + flushSize, to_seq) )
+        flushSize = to_seq - ss->seq;
+
+    return flushSize;
+}
+
 static int FlushStream(
         Packet* p, StreamTracker *st, uint32_t toSeq, uint8_t *flushbuf,
         const uint8_t *flushbuf_end)
@@ -5002,7 +4726,7 @@ static int FlushStream(
         STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                     "Flushing %u bytes from %X\n", bytes_to_copy, ss->seq));
 
-        if(ss->urg_offset >= 1)
+        if(ss->urg_offset == 1)
         {
             /* if urg_offset is set, seq + urg_offset is seq # of octet
              * in stream following the last urgent octet.  all preceding
@@ -5029,10 +4753,6 @@ static int FlushStream(
 
                 bytes_skipped += ss->urg_offset;
             }
-            else
-            {
-                ss->urg_offset = 0;
-            }
         }
         else
         {
@@ -5049,8 +4769,7 @@ static int FlushStream(
                 flushbuf += bytes_to_copy;
         }
 
-        if ( !st->paf_state.fpt_eoh &&
-                bytes_to_copy < ss->size &&
+        if ( bytes_to_copy < ss->size &&
                 DupStreamNode(NULL, st, ss, &sr) == STREAM_INSERT_OK )
         {
             ss->size = bytes_to_copy;
@@ -5293,10 +5012,17 @@ static void TcpSessionClear (SessionControlBlock* scb, TcpSession* tcpssn, int f
 
     // update stats
     s5stats.tcp_streamtrackers_released++;
-    if (s5stats.active_tcp_sessions > 0 )
-        s5stats.active_tcp_sessions--;
     StreamUpdatePerfBaseState(&sfBase, tcpssn->scb, TCP_STATE_CLOSED);
     RemoveStreamSession(&sfBase);
+
+#ifdef NORMALIZER
+    if(scb->session_state & STREAM_STATE_ESTABLISHED)
+    {
+        NormMode mode = Normalize_GetMode(snort_conf, NORM_FTP_DATA);
+        if((mode != NORM_MODE_OFF) && (scb->ftp_num_packets_normalized > snort_conf->ftp_data_trim_threshold))
+            normStats[PC_FTP_TRIM_DATA][mode]++;
+    }
+#endif
 
     if (scb->ha_state.session_flags & SSNFLAG_PRUNED)
         CloseStreamSession(&sfBase, SESSION_CLOSED_PRUNED);
@@ -5333,53 +5059,9 @@ static void TcpSessionClear (SessionControlBlock* scb, TcpSession* tcpssn, int f
     STREAM_DEBUG_WRAP( DebugMessage(DEBUG_STREAM_STATE,
                 "After cleaning, %lu bytes in use\n", session_mem_in_use););
 }
-static StreamTcpPolicy *StreamSearchTcpConfigForBoundPolicy(StreamTcpConfig *tcp_config, sfaddr_t *ip)
-{
-    int policyIndex;
-    StreamTcpPolicy *policy = NULL;
-
-    for (policyIndex = 0; policyIndex < tcp_config->num_policies; policyIndex++)
-    {
-        policy = tcp_config->policy_list[policyIndex];
-
-        if (policy->bound_addrs == NULL)
-            continue;
-
-        /*
-         * Does this policy handle packets to this IP address?
-         */
-        if(sfvar_ip_in(policy->bound_addrs, ip))
-        {
-            STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM,
-                        "[Stream] Found tcp policy in IpAddrSet\n"););
-            break;
-        }
-    }
-
-    if (policyIndex == tcp_config->num_policies)
-        policy = tcp_config->default_policy;
-
-    return policy;
-}
-
-static inline StreamTcpPolicy *StreamPolicyLookup( SessionControlBlock *scb, sfaddr_t *ip)
-{
-    StreamTcpConfig *tcp_config = ( ( StreamConfig * ) scb->stream_config )->tcp_config;
-
-    if( tcp_config != NULL )
-        return StreamSearchTcpConfigForBoundPolicy( tcp_config, ip );
-    else
-        return NULL;
-}
-
 static void FlushQueuedSegs(SessionControlBlock *scb, TcpSession *tcpssn)
 {
     DAQ_PktHdr_t tmp_pcap_hdr;
-
-#ifdef REG_TEST
-    if (getRegTestFlags() & REG_TEST_FLAG_STREAM_DECODE)
-        printf("\nFlushQueuedSegs | ");
-#endif
 
     /* Flush ack'd data on both sides as necessary */
     {
@@ -5395,7 +5077,6 @@ static void FlushQueuedSegs(SessionControlBlock *scb, TcpSession *tcpssn)
              * packets that we already alerted on. */
             policyDecoderFlagsSaveNClear(scb->napPolicyId);
         }
-        policyChecksumFlagsSaveNClear(scb->napPolicyId);
 
         /* Flush the client */
         if (tcpssn->client.seglist && !(scb->ha_state.ignore_direction & SSN_DIR_FROM_SERVER) )
@@ -5415,10 +5096,11 @@ static void FlushQueuedSegs(SessionControlBlock *scb, TcpSession *tcpssn)
 
             //set policy id for this packet
             {
-#ifdef HAVE_DAQ_REAL_ADDRESSES
+                int vlanId = (p->vh)? VTH_VLAN(p->vh) : -1;
                 sfaddr_t* srcIp = (p->iph)? GET_SRC_IP((p)) : NULL;
                 sfaddr_t* dstIp = (p->iph)? GET_DST_IP((p)) : NULL;
 
+#ifdef HAVE_DAQ_REAL_ADDRESSES
                 if (srcIp && dstIp)
                 {
                     if (srcIp->family == AF_INET6)
@@ -5433,29 +5115,11 @@ static void FlushQueuedSegs(SessionControlBlock *scb, TcpSession *tcpssn)
                         memcpy(&((((DAQ_PktHdr_t*)p->pkth)->real_dIP).s6_addr), &(dstIp)->ia32[3], sizeof(uint32_t));
                     }
                     ((DAQ_PktHdr_t*)p->pkth)->flags |= DAQ_PKT_FLAG_REAL_ADDRESSES;
-
-                    if( tcpssn->daq_flags & DAQ_PKT_FLAG_IGNORE_VLAN )
-                        ((DAQ_PktHdr_t*)p->pkth)->flags |= DAQ_PKT_FLAG_IGNORE_VLAN;
                 }
 #endif
 
-                if( scb->session_config != session_configuration )
-                {
-                    getSessionPlugins()->select_session_nap(p, true );
-                    scb->napPolicyId = getNapRuntimePolicy();
-                    scb->ipsPolicyId = getDefaultPolicy();
-                    p->configPolicyId = snort_conf->targeted_policies[scb->ipsPolicyId]->configPolicyId;
-                    scb->stream_config = sfPolicyUserDataGet( stream_online_config, scb->napPolicyId );
-                    tcpssn->client.tcp_policy = StreamPolicyLookup(scb, GET_DST_IP(p));
-                    tcpssn->server.tcp_policy = StreamPolicyLookup(scb, GET_SRC_IP(p));
-                }
-                else
-                {
-                     setNapRuntimePolicy(scb->napPolicyId);
-                     setIpsRuntimePolicy(scb->ipsPolicyId);
-                     p->configPolicyId = snort_conf->targeted_policies[scb->ipsPolicyId]->configPolicyId;
-                     scb->stream_config = sfPolicyUserDataGet( stream_online_config, scb->napPolicyId );
-                }
+                setNapRuntimePolicy(sfGetApplicablePolicyId(snort_conf->policy_config, vlanId, srcIp, dstIp));
+                p->configPolicyId = snort_conf->targeted_policies[getIpsRuntimePolicy()]->configPolicyId;
 
                 //actions are queued only for IDS case
                 sfActionQueueExecAll(decoderActionQ);
@@ -5504,10 +5168,11 @@ static void FlushQueuedSegs(SessionControlBlock *scb, TcpSession *tcpssn)
 
             //set policy id for this packet
             {
-#ifdef HAVE_DAQ_REAL_ADDRESSES
+                int vlanId = (p->vh)? VTH_VLAN(p->vh) : -1;
                 sfaddr_t* srcIp = (p->iph)? GET_SRC_IP((p)) : NULL;
                 sfaddr_t* dstIp = (p->iph)? GET_DST_IP((p)) : NULL;
 
+#ifdef HAVE_DAQ_REAL_ADDRESSES
                 if (srcIp && dstIp)
                 {
                     if (srcIp->family == AF_INET6)
@@ -5522,31 +5187,14 @@ static void FlushQueuedSegs(SessionControlBlock *scb, TcpSession *tcpssn)
                         memcpy(&((((DAQ_PktHdr_t*)p->pkth)->real_dIP).s6_addr), &(dstIp)->ia32[3], sizeof(uint32_t));
                     }
                     ((DAQ_PktHdr_t*)p->pkth)->flags |= DAQ_PKT_FLAG_REAL_ADDRESSES;
-
-                    if( tcpssn->daq_flags & DAQ_PKT_FLAG_IGNORE_VLAN )
-                        ((DAQ_PktHdr_t*)p->pkth)->flags |= DAQ_PKT_FLAG_IGNORE_VLAN;
                 }
 #endif
 
-                if( scb->session_config != session_configuration )
-                {
-                    getSessionPlugins()->select_session_nap(p, false );
-                    scb->ipsPolicyId = getDefaultPolicy();
-                    scb->napPolicyId = getNapRuntimePolicy();
-                    p->configPolicyId = snort_conf->targeted_policies[scb->ipsPolicyId]->configPolicyId;
-                    scb->stream_config = sfPolicyUserDataGet( stream_online_config, scb->napPolicyId );
-                    tcpssn->client.tcp_policy = StreamPolicyLookup(scb, GET_SRC_IP(p));
-                    tcpssn->server.tcp_policy = StreamPolicyLookup(scb, GET_DST_IP(p));
-                }
-                else
-                {
-                     setNapRuntimePolicy(scb->napPolicyId);
-                     setIpsRuntimePolicy(scb->ipsPolicyId);
-                     p->configPolicyId = snort_conf->targeted_policies[scb->ipsPolicyId]->configPolicyId;
-                     scb->stream_config = sfPolicyUserDataGet( stream_online_config, scb->napPolicyId );
-                }
-                
-		//actions are queued only for IDS case
+                setNapRuntimePolicy(sfGetApplicablePolicyId(
+                            snort_conf->policy_config, vlanId, srcIp, dstIp));
+                p->configPolicyId = snort_conf->targeted_policies[getIpsRuntimePolicy()]->configPolicyId;
+
+                //actions are queued only for IDS case
                 sfActionQueueExecAll(decoderActionQ);
             }
             SnortEventqPop();
@@ -5580,7 +5228,6 @@ static void FlushQueuedSegs(SessionControlBlock *scb, TcpSession *tcpssn)
             /* And turn decoder alerts back on (or whatever they were set to) */
             policyDecoderFlagsRestore(scb->napPolicyId);
         }
-        policyChecksumFlagsRestore(scb->napPolicyId);
 
     }
 
@@ -5600,8 +5247,6 @@ static void TcpSessionCleanup(SessionControlBlock *scb, int freeApplicationData)
         return;
     }
 
-    stream_session_config = scb->session_config;
-
     FlushQueuedSegs(scb, tcpssn);
 
     TcpSessionClear(scb, tcpssn, freeApplicationData);
@@ -5611,7 +5256,47 @@ static void TcpSessionCleanupWithFreeApplicationData(void *scb)
 {
     TcpSessionCleanup( ( SessionControlBlock * ) scb, 1);
 }
- 
+
+static StreamTcpPolicy *StreamSearchTcpConfigForBoundPolicy(StreamTcpConfig *tcp_config, sfaddr_t *ip)
+{
+    int policyIndex;
+    StreamTcpPolicy *policy = NULL;
+
+    for (policyIndex = 0; policyIndex < tcp_config->num_policies; policyIndex++)
+    {
+        policy = tcp_config->policy_list[policyIndex];
+
+        if (policy->bound_addrs == NULL)
+            continue;
+
+        /*
+         * Does this policy handle packets to this IP address?
+         */
+        if(sfvar_ip_in(policy->bound_addrs, ip))
+        {
+            STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM,
+                        "[Stream] Found tcp policy in IpAddrSet\n"););
+            break;
+        }
+    }
+
+    if (policyIndex == tcp_config->num_policies)
+        policy = tcp_config->default_policy;
+
+    return policy;
+}
+
+
+static inline StreamTcpPolicy *StreamPolicyLookup( SessionControlBlock *scb, sfaddr_t *ip)
+{
+    StreamTcpConfig *tcp_config = ( ( StreamConfig * ) scb->stream_config )->tcp_config;
+
+    if( tcp_config != NULL )
+        return StreamSearchTcpConfigForBoundPolicy( tcp_config, ip );
+    else
+        return NULL;
+}
+
 struct session_state_cleanup_cache
 {
     uint32_t old_mem_in_use;
@@ -5867,12 +5552,8 @@ static inline void S5TraceTCP (
 int StreamProcessTcp(Packet *p, SessionControlBlock *scb, StreamTcpPolicy *s5TcpPolicy, SessionKey *skey)
 {
     TcpDataBlock tdb;
-    SFXHASH_NODE *hash_node = NULL;
     int rc, status;
     PROFILE_VARS;
-#if defined(DAQ_CAPA_CST_TIMEOUT)
-    uint64_t timeout;
-#endif
 
     STREAM_DEBUG_WRAP(
             char flagbuf[9];
@@ -5918,11 +5599,6 @@ int StreamProcessTcp(Packet *p, SessionControlBlock *scb, StreamTcpPolicy *s5Tcp
 #ifdef ACTIVE_RESPONSE
             StreamActiveResponse(p, scb);
 #endif
-            if (pkt_trace_enabled)
-                addPktTraceData(VERDICT_REASON_STREAM, snprintf(trace_line, MAX_TRACE_LINE,
-                    "Stream: TCP session was already blocked, %s\n", getPktTraceActMsg()));
-            else addPktTraceData(VERDICT_REASON_STREAM, 0);
-
             PREPROC_PROFILE_END(s5TcpPerfStats);
             return ACTION_NOTHING;
         }
@@ -5940,13 +5616,6 @@ int StreamProcessTcp(Packet *p, SessionControlBlock *scb, StreamTcpPolicy *s5Tcp
             PREPROC_PROFILE_END( s5TcpPerfStats );
             return 0;
         }
-#if defined(DAQ_CAPA_CST_TIMEOUT)
-        if (Daq_Capa_Timeout)
-        {
-           GetTimeout(p,&timeout);
-           s5TcpPolicy->session_timeout = timeout + STREAM_DELAY_TIMEOUT_AFTER_CONNECTION_ENDED; 
-        }
-#endif
     }
 
     rc = isPacketFilterDiscard( p,
@@ -5981,7 +5650,6 @@ int StreamProcessTcp(Packet *p, SessionControlBlock *scb, StreamTcpPolicy *s5Tcp
                 scb->session_established = true;
                 scb->proto_policy = s5TcpPolicy;
                 s5stats.total_tcp_sessions++;
-                s5stats.active_tcp_sessions++;
             }
             else
             {
@@ -6021,7 +5689,6 @@ midstream_pickup_allowed:
                 scb->session_established = true;
                 scb->proto_policy = s5TcpPolicy;
                 s5stats.total_tcp_sessions++;
-                s5stats.active_tcp_sessions++;
             }
             else if (p->dsize > 0)
             {
@@ -6032,20 +5699,17 @@ midstream_pickup_allowed:
                 scb->session_established = true;
                 scb->proto_policy = s5TcpPolicy;
                 s5stats.total_tcp_sessions++;
-                s5stats.active_tcp_sessions++;
             }
-            else if( ( ( ( ( StreamConfig * ) scb->stream_config )->tcp_config->session_on_syn ||
+            else if( ( ( ( StreamConfig * ) scb->stream_config )->tcp_config->session_on_syn ||
                         ( StreamPacketHasWscale(p) & TF_WSCALE ) )
-                    && TCP_ISFLAGSET(p->tcph, TH_SYN) ) || StreamExpectIsExpected( p, &hash_node ) )
+                    && TCP_ISFLAGSET(p->tcph, TH_SYN))
             {
-                /* If we have a wscale option or this is an expected connection, need to save the
-                 * option if its the first SYN from client or continue to get the expected session
-                 * data. */
+                /* If we have a wscale option, need to save the
+                 * option if its the first SYN from client. */
                 scb->session_state = STREAM_STATE_SYN;
                 scb->session_established = true;
                 scb->proto_policy = s5TcpPolicy;
                 s5stats.total_tcp_sessions++;
-                s5stats.active_tcp_sessions++;
             }
             else
             {
@@ -6104,7 +5768,7 @@ midstream_pickup_allowed:
             cleanup_cache_session_state( scb, &sscc );
             TcpSessionCleanupWithFreeApplicationData(scb);
             cleanup_log_session_state( "new data/reset", &sscc );
-            status = ProcessTcp( scb, p, &tdb, s5TcpPolicy, hash_node );
+            status = ProcessTcp( scb, p, &tdb, s5TcpPolicy );
 
             STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                         "Finished Stream TCP cleanly!\n"
@@ -6120,12 +5784,12 @@ midstream_pickup_allowed:
             cleanup_cache_session_state( scb, &sscc );
             TcpSessionCleanupWithFreeApplicationData( scb );
             cleanup_log_session_state( "new data/timedout", &sscc );
-            status = ProcessTcp(scb, p, &tdb, s5TcpPolicy, hash_node);
+            status = ProcessTcp(scb, p, &tdb, s5TcpPolicy);
         }
     }
     else
     {
-        status = ProcessTcp( scb, p, &tdb, s5TcpPolicy, hash_node );
+        status = ProcessTcp( scb, p, &tdb, s5TcpPolicy );
         STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                     "Finished Stream TCP cleanly!\n"
                     "---------------------------------------------------\n"););
@@ -6134,19 +5798,7 @@ midstream_pickup_allowed:
     if( !( status & ACTION_LWSSN_CLOSED ) )
     {
         MarkupPacketFlags( p, scb );
-        /* Receiving valid RST for a ongoing/hanged tcp session,
-         * override configured session timeout to non-configurable
-         * lower timeout of 180 seconds to clean up the session.
-         */
-        if((status & ACTION_RST) &&
-            (scb->expire_time - (((uint64_t)p->pkth->ts.tv_sec ) * TCP_HZ)) > (STREAM_SSN_RST_TIMEOUT * TCP_HZ))
-        {
-            session_api->set_expire_timer(p, scb, STREAM_SSN_RST_TIMEOUT);
-        }     
-        else
-        {   
-            session_api->set_expire_timer( p, scb, s5TcpPolicy->session_timeout );
-        }
+        session_api->set_expire_timer( p, scb, s5TcpPolicy->session_timeout );
     }
 #ifdef ENABLE_HA
     else
@@ -6470,10 +6122,10 @@ static void NewQueue(StreamTracker *st, Packet *p, TcpDataBlock *tdb, TcpSession
         /* new packet seq is below the last ack... */
         if ( SEQ_GT(st->r_win_base, seq) )
         {
-            STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE, 
+            STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                         "segment overlaps ack'd data...\n"););
             overlap = st->r_win_base - tdb->seq;
-            if (overlap >= p->dsize)
+            if(overlap >= p->dsize)
             {
                 STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                             "full overlap on ack'd data, dropping segment\n"););
@@ -6494,7 +6146,6 @@ static void NewQueue(StreamTracker *st, Packet *p, TcpDataBlock *tdb, TcpSession
     return;
 }
 
-#if 0
 static inline StreamSegment *FindSegment(StreamTracker *st, uint32_t pkt_seq)
 {
     int32_t dist_head;
@@ -6533,7 +6184,6 @@ static inline StreamSegment *FindSegment(StreamTracker *st, uint32_t pkt_seq)
     }
     return NULL;
 }
-#endif
 
 void StreamTcpSessionClear(Packet *p)
 {
@@ -6589,7 +6239,6 @@ static inline StreamSegment* SegmentAlloc (
             session_mem_in_use -= size;
             return NULL;
         }
-
         /* Smack the older time'd out sessions */
         if ( !session_api->prune_session_cache( tcp_lws_cache, p->pkth->ts.tv_sec,
                     ( SessionControlBlock * ) p->ssnptr, 0 ) )
@@ -6599,13 +6248,8 @@ static inline StreamSegment* SegmentAlloc (
             session_api->prune_session_cache(tcp_lws_cache, 0, (SessionControlBlock*) p->ssnptr, 1);
         }
     }
-    if (session_mem_in_use > stream_session_config->memcap)
-    {
-        session_mem_in_use -= size;
-        return NULL;
-    }
 
-    ss = SnortPreprocAlloc(1, size, PP_STREAM, PP_MEM_CATEGORY_SESSION);
+    ss = SnortAlloc(size);
 
     ss->tv.tv_sec = tv->tv_sec;
     ss->tv.tv_usec = tv->tv_usec;
@@ -6688,8 +6332,6 @@ static int AddStreamNode(StreamTracker *st, Packet *p,
     }
 
     ss = SegmentAlloc(p, &p->pkth->ts, p->pkth->caplen, p->pkth->pktlen, p->pkt);
-    if (!ss)
-      return STREAM_INSERT_ANOMALY;
 
     ss->data = ss->pkt + (p->data - p->pkt);
     ss->orig_dsize = p->dsize;
@@ -6844,35 +6486,6 @@ static inline void EndOfFileHandle(Packet *p, TcpSession *tcpssn)
 
     if ( tcpssn->scb->handler[SE_EOF] )
         StreamCallHandler(p, tcpssn->scb->handler[SE_EOF]);
-}
-
-static inline bool IsRetransmitOfHeldSegment(Packet *p, TcpDataBlock *tdb,
-      StreamTracker *listener)
-{
-    StreamSegment *held_seg = listener->held_segment;
-
-    if (held_seg == NULL)
-        return FALSE;
-
-    if (held_seg->seq == tdb->seq)
-        return TRUE;
-
-    return FALSE;
-}
-
-static bool IsTCPFastOpenPkt (Packet *p)
-{
-    uint8_t opt_count = 0;
- 
-    while (opt_count < p->tcp_option_count)
-    {
-        if (p->tcp_options[opt_count].code == TCPOPT_TFO)
-        {
-            return TRUE;
-        }
-        opt_count++;
-    }
-    return FALSE; 
 }
 
 static int StreamQueue(StreamTracker *st, Packet *p, TcpDataBlock *tdb,
@@ -7233,16 +6846,7 @@ static int StreamQueue(StreamTracker *st, Packet *p, TcpDataBlock *tdb,
         /* Treat sequence number overlap as a retransmission
          * Only check right side since left side happens rarely
          */
-        if((st->flush_mgr.flush_policy == STREAM_FLPOLICY_FOOTPRINT_IPS_FTP) && (overlap == right->size) && right->next && (right->next->size > 0))
-        {
-            STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
-                        "ftp-data daq retry or rexmit, do not call RetransmitHandle as \
-                        data beyond this packet is already received\n"););
-        }
-        else
-        {
-            RetransmitHandle(p, tcpssn);
-        }
+        RetransmitHandle(p, tcpssn);
 
         if(overlap < right->size)
         {
@@ -7255,15 +6859,7 @@ static int StreamQueue(StreamTracker *st, Packet *p, TcpDataBlock *tdb,
 			p->packet_flags |= PKT_RETRANSMIT;
 #endif
                 // All data was retransmitted
-                if (IsRetransmitOfHeldSegment(p, tdb, st))
-                {
-                    st->held_segment = NULL;
-                    p->packet_flags |= PKT_PSEUDO_FLUSH;
-                }
-                else
-                {
-                    RetransmitProcess(p, tcpssn);
-                }
+                RetransmitProcess(p, tcpssn);
                 addthis = 0;
                 break;
             }
@@ -7367,15 +6963,7 @@ static int StreamQueue(StreamTracker *st, Packet *p, TcpDataBlock *tdb,
 			    p->packet_flags |= PKT_RETRANSMIT;
 #endif
                     // All data was retransmitted
-                    if (IsRetransmitOfHeldSegment(p, tdb, st))
-                    {
-                        st->held_segment = NULL;
-                        p->packet_flags |= PKT_PSEUDO_FLUSH;
-                    }
-                    else
-                    {
-                        RetransmitProcess(p, tcpssn);
-                    }
+                    RetransmitProcess(p, tcpssn);
 
                     addthis = 0;
                 }
@@ -7656,22 +7244,25 @@ static void ProcessTcpStream(StreamTracker *rcv, TcpSession *tcpssn,
         return;
     }
 
-    if ((s5TcpPolicy->max_consec_small_segs) &&
-        /* check ignore_ports */
-        !(s5TcpPolicy->small_seg_ignore[p->dp/8] & (1 << (p->dp %8))))
+    if (s5TcpPolicy->max_consec_small_segs)
     {
-        if (p->dsize >= s5TcpPolicy->max_consec_small_seg_size)
+        if (p->dsize < s5TcpPolicy->max_consec_small_seg_size)
         {
-            rcv->small_seg_count = 0;
-        }
-        else 
-        {
-            if (++rcv->small_seg_count == s5TcpPolicy->max_consec_small_segs)
+            /* check ignore_ports */
+            if (!(s5TcpPolicy->small_seg_ignore[p->dp/8] & (1 << (p->dp %8))))
             {
-                /* Above threshold, log it... requires detect_anomalies be
-                 * on in this TCP policy, action controlled by preprocessor
-                 * rule. */
-                EventMaxSmallSegsExceeded(s5TcpPolicy);
+                rcv->small_seg_count++;
+
+                if (rcv->small_seg_count > s5TcpPolicy->max_consec_small_segs)
+                {
+                    /* Above threshold, log it... requires detect_anomalies be
+                     * on in this TCP policy, action controlled by preprocessor
+                     * rule. */
+                    EventMaxSmallSegsExceeded(s5TcpPolicy);
+
+                    /* Reset counter, so we're not too noisy */
+                    rcv->small_seg_count = 0;
+                }
             }
         }
     }
@@ -7761,7 +7352,7 @@ static void ProcessTcpStream(StreamTracker *rcv, TcpSession *tcpssn,
             if ( SEQ_GT(rcv->r_win_base, tdb->seq) )
             {
                 uint32_t offset = rcv->r_win_base - tdb->seq;
-                
+
                 if ( offset < p->dsize )
                 {
                     tdb->seq += offset;
@@ -7849,7 +7440,7 @@ static int ProcessTcpData(Packet *p, StreamTracker *listener, TcpSession *tcpssn
                 "In ProcessTcpData()\n"););
 
     PREPROC_PROFILE_START(s5TcpDataPerfStats);
-    if (!IsTCPFastOpenPkt(p) && (p->tcph->th_flags & TH_SYN) && (listener->os_policy != STREAM_POLICY_MACOS))
+    if ((p->tcph->th_flags & TH_SYN) && (listener->os_policy != STREAM_POLICY_MACOS))
     {
         STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                     "Bailing, data on SYN, not MAC Policy!\n"););
@@ -7897,20 +7488,11 @@ static int ProcessTcpData(Packet *p, StreamTracker *listener, TcpSession *tcpssn
 
         if(p->dsize != 0)
         {
-            if (listener->flags &  TF_MISSING_PKT)
-                tcpssn->scb->ha_state.session_flags |= SSNFLAG_STREAM_ORDER_BAD;
-
-            if (tcpssn->scb->ha_state.session_flags & SSNFLAG_STREAM_ORDER_BAD)
-                p->packet_flags |= PKT_STREAM_ORDER_BAD;
-            else
+            if ( !(tcpssn->scb->ha_state.session_flags & SSNFLAG_STREAM_ORDER_BAD) )
                 p->packet_flags |= PKT_STREAM_ORDER_OK;
 
             ProcessTcpStream(listener, tcpssn, p, tdb, s5TcpPolicy);
-
-            if (SEQ_GT(listener->r_nxt_ack,tdb->end_seq))
-            {
-                tcpssn->scb->ha_state.session_flags |= SSNFLAG_STREAM_ORDER_BAD;
-            }
+            /* set flags to session flags */
 
             PREPROC_PROFILE_END(s5TcpDataPerfStats);
             return STREAM_ALIGNED;
@@ -7974,22 +7556,12 @@ static int ProcessTcpData(Packet *p, StreamTracker *listener, TcpSession *tcpssn
 
         if(p->dsize != 0)
         {
-            uint32_t r_nxt_ack_old = listener->r_nxt_ack;
-            if (SEQ_GT(listener->r_win_base, listener->r_nxt_ack) ||
-                    (listener->flags & TF_MISSING_PKT))
-                tcpssn->scb->ha_state.session_flags |= SSNFLAG_STREAM_ORDER_BAD;
-
-            if (tcpssn->scb->ha_state.session_flags & SSNFLAG_STREAM_ORDER_BAD)
-                p->packet_flags |= PKT_STREAM_ORDER_BAD;
-
-            ProcessTcpStream(listener, tcpssn, p, tdb, s5TcpPolicy);
-
-            /* If we have moved the expected seq, overlapped segment, set BAD flag*/
-            if (SEQ_GT(listener->r_nxt_ack, r_nxt_ack_old))
+            if ( !(tcpssn->scb->ha_state.session_flags & SSNFLAG_STREAM_ORDER_BAD) )
             {
-                tcpssn->scb->ha_state.session_flags |= SSNFLAG_STREAM_ORDER_BAD;
-                p->packet_flags |= PKT_STREAM_ORDER_BAD;
+                if ( !SEQ_LEQ((tdb->seq + p->dsize), listener->r_nxt_ack) )
+                    tcpssn->scb->ha_state.session_flags |= SSNFLAG_STREAM_ORDER_BAD;
             }
+            ProcessTcpStream(listener, tcpssn, p, tdb, s5TcpPolicy);
         }
     }
 
@@ -8148,11 +7720,6 @@ static int NewTcpSession(Packet *p, SessionControlBlock *scb, TcpDataBlock *tdb,
          * start new sessions on proper SYN packets
          *****************************************************************/
         tmpBucket = session_api->alloc_protocol_session( SESSION_PROTO_TCP );
-        if(!tmpBucket)
-        {
-            PREPROC_PROFILE_END(s5TcpNewSessPerfStats);
-            return -1;
-        }
         tmp = tmpBucket->data;
         STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                     "Creating new session tracker on SYN!\n"););
@@ -8210,11 +7777,6 @@ static int NewTcpSession(Packet *p, SessionControlBlock *scb, TcpDataBlock *tdb,
          * start new sessions on SYN/ACK from server
          *****************************************************************/
         tmpBucket = session_api->alloc_protocol_session( SESSION_PROTO_TCP );
-        if(!tmpBucket)
-        {
-            PREPROC_PROFILE_END(s5TcpNewSessPerfStats);
-            return -1;
-        }
         tmp = tmpBucket->data;
         STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                     "Creating new session tracker on SYN_ACK!\n"););
@@ -8276,11 +7838,6 @@ static int NewTcpSession(Packet *p, SessionControlBlock *scb, TcpDataBlock *tdb,
          * start new sessions on completion of 3-way (ACK only, no data)
          *****************************************************************/
         tmpBucket = session_api->alloc_protocol_session( SESSION_PROTO_TCP );
-        if(!tmpBucket)
-        {
-            PREPROC_PROFILE_END(s5TcpNewSessPerfStats);
-            return -1;
-        }
         tmp = tmpBucket->data;
         STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                     "Creating new session tracker on ACK!\n"););
@@ -8334,11 +7891,6 @@ static int NewTcpSession(Packet *p, SessionControlBlock *scb, TcpDataBlock *tdb,
          * start new sessions on data in packet
          *****************************************************************/
         tmpBucket = session_api->alloc_protocol_session( SESSION_PROTO_TCP );
-        if(!tmpBucket)
-        {
-            PREPROC_PROFILE_END(s5TcpNewSessPerfStats);
-            return -1;
-        }
         tmp = tmpBucket->data;
         STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                     "Creating new session tracker on data packet (ACK|PSH)!\n"););
@@ -8367,8 +7919,6 @@ static int NewTcpSession(Packet *p, SessionControlBlock *scb, TcpDataBlock *tdb,
             tmp->client.l_unackd = tdb->seq;
             tmp->client.l_nxt_seq = tmp->client.l_unackd;
             tmp->client.l_window = tdb->win;
-            tmp->client.r_nxt_ack = tdb->ack;
-            tmp->client.r_win_base = tdb->ack;
 
             tmp->client.ts_last_pkt = p->pkth->ts.tv_sec;
 
@@ -8378,7 +7928,7 @@ static int NewTcpSession(Packet *p, SessionControlBlock *scb, TcpDataBlock *tdb,
             tmp->server.l_window = 0; /* reset later */
 
             /* Next server packet is what was ACKd */
-            tmp->server.l_nxt_seq = tdb->ack;
+            //tmp->server.l_nxt_seq = tdb->ack + 1;
             tmp->server.l_unackd = tdb->ack - 1;
 
             STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
@@ -8425,7 +7975,6 @@ static int NewTcpSession(Packet *p, SessionControlBlock *scb, TcpDataBlock *tdb,
             tmp->client.r_win_base = tdb->seq;
             tmp->client.l_window = 0; /* reset later */
             tmp->client.isn = tdb->ack-1;
-            tmp->client.l_nxt_seq = tdb->ack;
 
             STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                         "seglist_base_seq = %X\n", tmp->client.seglist_base_seq););
@@ -8546,7 +8095,6 @@ static int NewTcpSession(Packet *p, SessionControlBlock *scb, TcpDataBlock *tdb,
 #ifdef STREAM_DEBUG_ENABLED
         PrintTcpSession(tmp);
 #endif
-
         session_api->set_expire_timer(p, scb, dstPolicy->session_timeout);
 
         s5stats.tcp_streamtrackers_created++;
@@ -8566,60 +8114,6 @@ static int NewTcpSession(Packet *p, SessionControlBlock *scb, TcpDataBlock *tdb,
     PREPROC_PROFILE_END(s5TcpNewSessPerfStats);
     return 0;
 }
-
-/* set_service_based_flush_policy
- *
- * Once appid detects the protocol, calling this api
- * to set the respective paf apis. 
- * If paf function pointer already pointed to the
- * correct paf api, not going to set again.
- */ 
-void set_service_based_flush_policy(SessionControlBlock *scb)
-{
-    TcpSession *tcp_session = NULL;
-    StreamTracker* pst;
-    uint8_t flush_policy;
-    int ret;
-
-#ifdef TARGET_BASED
-    if (scb->proto_specific_data)
-        tcp_session = scb->proto_specific_data->data;
-
-    if (tcp_session == NULL)
-        return;
-
-    if (tcp_session->client.tcp_policy->flush_config_protocol[scb->ha_state.application_protocol].configured == 1)
-    {
-        pst = &tcp_session->server;
-        ret = cb_mask_cmp(((StreamConfig *)scb->stream_config)->tcp_config->paf_config,
-                          scb->ha_state.application_protocol, true, pst->paf_state.cb_mask);
-        if (ret <= 0)
-        {   
-            return;
-        }
-
-        flush_policy =
-            pst->tcp_policy->flush_config_protocol[scb->ha_state.application_protocol].client.flush_policy;
-        InitFlushMgrByService(scb, pst, scb->ha_state.application_protocol, true, flush_policy);
-    }
-
-    if (tcp_session->server.tcp_policy->flush_config_protocol[scb->ha_state.application_protocol].configured == 1)
-    {
-        pst = &tcp_session->client;
-        ret = cb_mask_cmp(((StreamConfig *)scb->stream_config)->tcp_config->paf_config,
-                          scb->ha_state.application_protocol, false, pst->paf_state.cb_mask);
-        if (ret <= 0)
-        {
-            return;
-        }
-
-        flush_policy =
-            pst->tcp_policy->flush_config_protocol[scb->ha_state.application_protocol].server.flush_policy;
-        InitFlushMgrByService(scb, pst, scb->ha_state.application_protocol, false, flush_policy);
-    }
-#endif
-}
-
 
 static int RepeatedSyn(
         StreamTracker *listener, StreamTracker *talker,
@@ -8773,7 +8267,7 @@ static inline bool checkFINTransitionStatus(const Packet* p, StreamTracker *list
 }
 
 static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
-                      StreamTcpPolicy *s5TcpPolicy, SFXHASH_NODE *hash_node)
+                      StreamTcpPolicy *s5TcpPolicy)
 {
     int retcode = ACTION_NOTHING;
     int eventcode = 0;
@@ -8800,16 +8294,13 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
         tcpssn = (TcpSession *)scb->proto_specific_data->data;
 
     PREPROC_PROFILE_START(s5TcpStatePerfStats);
-            
+
     if (tcpssn == NULL)
     {
         if ( ScPafEnabled() )
         {
             /* Check if the session is to be ignored */
-            if (hash_node)
-                ignore = StreamExpectProcessNode(p, scb, hash_node);
-            else
-                ignore = StreamExpectCheck(p, scb);
+            ignore = StreamExpectCheck(p, scb);
             if (ignore)
             {
                 DisableInspection(scb, p, ignore);
@@ -8833,11 +8324,7 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
                  *    is the only one that accepts data on SYN
                  *    (and thus requires a TCP session at this point)
                  */
-                if(NewTcpSession(p, scb, tdb, s5TcpPolicy)== -1 )
-                {
-                    PREPROC_PROFILE_END(s5TcpStatePerfStats);
-                    return retcode;
-                }
+                NewTcpSession(p, scb, tdb, s5TcpPolicy);
                 tcpssn = (TcpSession *)scb->proto_specific_data->data;
                 new_ssn = 1;
                 NormalTrackECN(tcpssn, p->tcph, require3Way);
@@ -8850,11 +8337,7 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
             scb->session_state |= STREAM_STATE_SYN_ACK;
             if (!require3Way || midstream_allowed)
             {
-                if(NewTcpSession(p, scb, tdb, s5TcpPolicy)== -1 )
-                {
-                    PREPROC_PROFILE_END(s5TcpStatePerfStats);
-                    return retcode;
-                }
+                NewTcpSession(p, scb, tdb, s5TcpPolicy);
                 tcpssn = (TcpSession *)scb->proto_specific_data->data;
                 new_ssn = 1;
             }
@@ -8869,11 +8352,7 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
 
             /* 3-way Handshake complete, create TCP session */
             scb->session_state |= STREAM_STATE_ACK | STREAM_STATE_ESTABLISHED;
-            if(NewTcpSession(p, scb, tdb, s5TcpPolicy)== -1 )
-            {
-                PREPROC_PROFILE_END(s5TcpStatePerfStats);
-                return retcode;
-            }
+            NewTcpSession(p, scb, tdb, s5TcpPolicy);
             tcpssn = (TcpSession *)scb->proto_specific_data->data;
             new_ssn = 1;
 
@@ -8937,11 +8416,7 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
 #endif
             }
 #endif
-            if(NewTcpSession(p, scb, tdb, s5TcpPolicy)== -1 )
-            {
-                PREPROC_PROFILE_END(s5TcpStatePerfStats);
-                return retcode;
-            }
+            NewTcpSession(p, scb, tdb, s5TcpPolicy);
             tcpssn = (TcpSession *)scb->proto_specific_data->data;
             new_ssn = 1;
             NormalTrackECN(tcpssn, p->tcph, require3Way);
@@ -8981,10 +8456,7 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
         /* If session is already marked as established */
         if (!(scb->session_state & STREAM_STATE_ESTABLISHED))
         {
-            if (hash_node)
-                ignore = StreamExpectProcessNode(p, scb, hash_node);
-            else
-                ignore = StreamExpectCheck(p, scb);
+            ignore = StreamExpectCheck(p, scb);
             if (p->packet_flags & PKT_EARLY_REASSEMBLY)
             {
                 p->packet_flags &= ~PKT_EARLY_REASSEMBLY;
@@ -9104,12 +8576,7 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
             SetTTL(scb, p, 1);
 #endif
     }
-    /* Check if there is a reload and policy is changed */
-    if( listener && talker && listener->tcp_policy != s5TcpPolicy && talker->tcp_policy != s5TcpPolicy)
-    {
-        listener->tcp_policy = s5TcpPolicy;
-        talker->tcp_policy = StreamPolicyLookup(scb, GET_SRC_IP(p));
-    }
+
     /*
      * check for SYN on reset session
      */
@@ -9149,11 +8616,7 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
 #ifdef ACTIVE_RESPONSE
                 SetTTL(scb, p, 1);
 #endif
-                if(NewTcpSession(p, scb, tdb, s5TcpPolicy)== -1 )
-                {
-                    PREPROC_PROFILE_END(s5TcpStatePerfStats);
-                    return retcode;
-                }
+                NewTcpSession(p, scb, tdb, s5TcpPolicy);
 
                 tcpssn = (TcpSession *)scb->proto_specific_data->data;
                 new_ssn = 1;
@@ -9177,11 +8640,7 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
 #ifdef ACTIVE_RESPONSE
                 SetTTL(scb, p, 0);
 #endif
-                if(NewTcpSession(p, scb, tdb, s5TcpPolicy)== -1 )
-                {
-                    PREPROC_PROFILE_END(s5TcpStatePerfStats);
-                    return retcode;
-                }
+                NewTcpSession(p, scb, tdb, s5TcpPolicy);
                 tcpssn = (TcpSession *)scb->proto_specific_data->data;
                 new_ssn = 1;
                 NormalTrackECN(tcpssn, p->tcph, require3Way);
@@ -9219,10 +8678,7 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
     /* Check if the session is to be ignored */
     if ( !ScPafEnabled() )
     {
-        if (hash_node)
-            ignore = StreamExpectProcessNode(p, scb, hash_node);
-        else
-            ignore = StreamExpectCheck(p, scb);
+        ignore = StreamExpectCheck(p, scb);
         if (ignore)
         {
             DisableInspection(scb, p, ignore);
@@ -9232,7 +8688,7 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
     }
 
     /* Handle data on SYN */
-    if (!IsTCPFastOpenPkt(p) && p->dsize && TCP_ISFLAGSET(p->tcph, TH_SYN))
+    if ((p->dsize) && TCP_ISFLAGSET(p->tcph, TH_SYN))
     {
         /* MacOS accepts data on SYN, so don't alert if policy is MACOS */
         if (StreamGetPolicy(scb, s5TcpPolicy, FROM_CLIENT) !=
@@ -9419,7 +8875,6 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
                     listener->s_mgr.state == TCP_STATE_FIN_WAIT_1 ||
                     listener->s_mgr.state == TCP_STATE_FIN_WAIT_2 ||
                     listener->s_mgr.state == TCP_STATE_CLOSE_WAIT ||
-                    listener->s_mgr.state == TCP_STATE_LAST_ACK   ||
                     listener->s_mgr.state == TCP_STATE_CLOSING
                ) {
                 StreamFlushTalker(p, scb);
@@ -9455,17 +8910,14 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
     else
     {
         /* check for valid seqeuence/retrans */
-        bool before_win_base = false;
         if( s5TcpPolicy->policy != STREAM_POLICY_NOACK )
         {
             if ( (listener->s_mgr.state >= TCP_STATE_ESTABLISHED) &&
-                    !ValidSeq(p, scb, listener, tdb, &before_win_base) )
+                    !ValidSeq(p, scb, listener, tdb) )
             {
                 STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                             "bad sequence number, bailing\n"););
                 Discard();
-                if(before_win_base)
-                    DisableAppPreprocessors(p);
                 NormalTrimPayloadIfWin(p, 0, tdb);
                 LogTcpEvents(listener->tcp_policy, eventcode);
                 PREPROC_PROFILE_END(s5TcpStatePerfStats);
@@ -9645,22 +9097,13 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
                 break;
 
             case TCP_STATE_ESTABLISHED:
-                /* Handle out-of-order/OOO ACK */
-                if ((Normalize_GetMode(snort_conf, NORM_TCP_IPS) == NORM_MODE_ON) &&
-                    (SEQ_GT(tdb->ack, listener->l_nxt_seq)))
-                {
-                    NormalDropPacket(p);
-                    PREPROC_PROFILE_END(s5TcpStatePerfStats);
-                    return retcode | ACTION_BAD_PKT;
-                }
-                UpdateSsn(p, listener, talker, tdb);
-                break;
-
             case TCP_STATE_CLOSE_WAIT:
                 UpdateSsn(p, listener, talker, tdb);
                 break;
 
             case TCP_STATE_FIN_WAIT_1:
+                UpdateSsn(p, listener, talker, tdb);
+
                 STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                             "tdb->ack %X >= talker->r_nxt_ack %X\n",
                             tdb->ack, talker->r_nxt_ack););
@@ -9682,7 +9125,6 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
 #endif
                     }
 
-                    UpdateSsn(p, listener, talker, tdb);
                     listener->s_mgr.state = TCP_STATE_FIN_WAIT_2;
 
                     if ( (p->tcph->th_flags & TH_FIN) )
@@ -9713,13 +9155,13 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
                 }
                 else
                 {
-                    UpdateSsn(p, listener, talker, tdb);
                     STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
                                 "bad ack!\n"););
                 }
                 break;
 
             case TCP_STATE_FIN_WAIT_2:
+                UpdateSsn(p, listener, talker, tdb);
                 if ( SEQ_GT(tdb->ack, listener->l_nxt_seq) )
                 {
                     eventcode |= EVENT_BAD_ACK;
@@ -9728,7 +9170,6 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
                     PREPROC_PROFILE_END(s5TcpStatePerfStats);
                     return retcode | ACTION_BAD_PKT;
                 }
-                UpdateSsn(p, listener, talker, tdb);
                 break;
 
             case TCP_STATE_CLOSING:
@@ -9802,14 +9243,6 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
             retcode |= ACTION_BAD_PKT;
             NormalDropPacket(p);
         }
-        else if ((TCP_STATE_FIN_WAIT_1 == talker->s_mgr.state) &&
-                 SEQ_GEQ(tdb->seq, (listener->s_mgr.transition_seq - 1)))
-        {   
-            /* Alert! : Data on a segment when we're not accepting data any more */
-            eventcode |= EVENT_DATA_ON_CLOSED;
-            retcode |= ACTION_BAD_PKT;
-            NormalDropPacket(p);
-        }
         else
         {
             STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
@@ -9872,6 +9305,15 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
                     "checking ack (0x%X) vs nxt_ack (0x%X)\n",
                     tdb->end_seq, listener->r_win_base););
 
+#ifdef NORMALIZER
+        if (( Normalize_GetMode(snort_conf, NORM_TCP_IPS) == NORM_MODE_ON ) &&
+                                    ( Normalize_GetMode(snort_conf, NORM_FTP_DATA) == NORM_MODE_ON ))
+        {
+            if(tcpssn->scb->proto_flags & PROTO_FTP_DATA_NORMALIZE){
+                tcpssn->scb->proto_flags &= ~(PROTO_FTP_DATA_NORMALIZE);
+            }
+        }
+#endif
         if(SEQ_LT(tdb->end_seq,listener->r_win_base))
         {
             STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
@@ -9978,10 +9420,6 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
                             listener->s_mgr.transition_seq = tdb->end_seq + 1;
                             listener->s_mgr.expected_flags = TH_ACK;
                             break;
-
-                        case TCP_STATE_CLOSED:
-                            listener->s_mgr.transition_seq = tdb->end_seq + 1;
-                            break; 
                     }
                 }
             }
@@ -10018,17 +9456,13 @@ static int ProcessTcp(SessionControlBlock *scb, Packet *p, TcpDataBlock *tdb,
                 }
                 switch ( listener->s_mgr.state )
                 {
-                    case TCP_STATE_ESTABLISHED:
-                        listener->s_mgr.state_queue = TCP_STATE_CLOSE_WAIT;
-                        listener->s_mgr.transition_seq = tdb->end_seq + 1;
-                        listener->s_mgr.expected_flags = TH_ACK;
-                        break;
-
-                    case TCP_STATE_CLOSED:
-                        listener->s_mgr.transition_seq = tdb->end_seq + 1;
-                        break;
-                }
-            }
+	                case TCP_STATE_ESTABLISHED:
+	                    listener->s_mgr.state_queue = TCP_STATE_CLOSE_WAIT;
+	                    listener->s_mgr.transition_seq = tdb->end_seq + 1;
+	                    listener->s_mgr.expected_flags = TH_ACK;
+	                    break;
+	            }
+	        }
         }
     }
 
@@ -10046,15 +9480,8 @@ dupfin:
      * handle TIME_WAIT timer stuff
      */
 
-    /* Handle Asymmetric connection closing, we will see only one
-     * direction pkts. FIN_ACK handling.
-     * Do not set state to closed prematurely when handling retry packets
-     * to avoid retry loop - CSCvc08844.
-     */
-    if((!TwoWayTraffic(scb) &&
-#ifdef DAQ_PKT_FLAG_RETRY_PACKET
-        !(p->pkth->flags & DAQ_PKT_FLAG_RETRY_PACKET) &&
-#endif
+    /* Handle Asymmetric connection closing, we will see only one direction pkts. FIN_ACK handling */
+    if((!TwoWayTraffic(scb)&&
         (talker->s_mgr.state >= TCP_STATE_FIN_WAIT_1 || listener->s_mgr.state >= TCP_STATE_FIN_WAIT_1)))
     {
         if (TCP_ISFLAGSET(p->tcph, (TH_FIN|TH_ACK)))
@@ -10079,10 +9506,6 @@ dupfin:
 #ifdef HAVE_DAQ_ADDRESS_SPACE_ID
         tcpssn->priv_ptr = NULL;
 #endif
-        if ( p->tcph->th_flags & TH_ACK )
-            CheckFlushPolicyOnAck( ( ( StreamConfig * ) scb->stream_config )->tcp_config,
-                       tcpssn, talker, listener, tdb, p);
-
         if(p->packet_flags & PKT_FROM_SERVER)
         {
             STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
@@ -10161,7 +9584,7 @@ dupfin:
                 !(p->tcph->th_flags & TH_ACK) &&
                 !(p->tcph->th_flags & TH_RST))
         {
-          session_api->set_expire_timer(p, scb, s5TcpPolicy->session_timeout);
+            session_api->set_expire_timer(p, scb, s5TcpPolicy->session_timeout);
         }
     }
 
@@ -10276,25 +9699,6 @@ static inline int CheckFlushCoercion (
     fm->last_count++;
     return 0;
 }
-
-static inline int CheckFTPFlushCoercion (Packet* p, FlushMgr* fm)
-{
-#ifdef HAVE_DAQ_DECRYPTED_SSL
-    if (p->pkth->flags & DAQ_PKT_FLAG_DECRYPTED_SSL)
-    {
-      if (fm->flush)
-        return 1;
-      else
-        return 0;
-    }
-#endif
-    if( p->dsize && p->dsize != fm->last_size )
-    {
-        fm->last_size = p->dsize;
-        return 1;
-    }
-    return 0;
-}
 #endif
 
 static inline bool AutoDisable (StreamTracker* a, StreamTracker* b)
@@ -10314,34 +9718,6 @@ static inline bool AutoDisable (StreamTracker* a, StreamTracker* b)
 }
 
 #ifdef NORMALIZER
-/*
- * In case of Pre-ACK mode, check if we need to
- * block packet so that the payload deos not reach endpoint without
- * inspection.
- */
-static inline bool check_to_hold_packet(Packet *pkt, PAF_Status paf_state,
-            StreamTracker *trk)
-{
-    if (((paf_state == PAF_PSEUDO_FLUSH_SEARCH) ||
-         (paf_state == PAF_PSEUDO_FLUSH_SKIP)) &&
-        !(pkt->packet_flags & PKT_PSEUDO_FLUSH))
-        {
-            if(trk->held_segment != NULL)
-                return FALSE;
-
-            return TRUE;
-        }
-        return FALSE;
-}
-
-static inline void hold_packet(Packet *pkt, StreamTracker *trk,
-     StreamSegment *seg)
-{
-    trk->held_segment = seg;
-    pkt->packet_flags |= PKT_FAST_BLOCK;
-    Active_DropPacket(pkt);
-}
-
 // see flush_pdu_ackd() for details
 // the key difference is that we operate on forward moving data
 // because we don't wait until it is acknowledged
@@ -10365,18 +9741,13 @@ static inline uint32_t flush_pdu_ips ( StreamTcpConfig *config, TcpSession *ssn,
         uint32_t size = seg->size;
         uint32_t end = seg->seq + seg->size;
         uint32_t pos = s5_paf_position(&trk->paf_state);
-	
+
         total += size;
 
         if ( s5_paf_initialized(&trk->paf_state) && SEQ_LEQ(end, pos) )
         {
-            if (!seg->next && pkt->packet_flags & PKT_PSEUDO_FLUSH)
-            {
-                *flags |= PKT_PSEUDO_FLUSH;
-            } else {
-                seg = seg->next;
-                continue;
-            }
+            seg = seg->next;
+            continue;
         }
         //Used by h2_paf
         wire_packet = pkt;
@@ -10384,12 +9755,6 @@ static inline uint32_t flush_pdu_ips ( StreamTcpConfig *config, TcpSession *ssn,
         flush_pt = s5_paf_check( config->paf_config, &trk->paf_state, ssn->scb,
                                  seg->payload, size, total, seg->seq, srv_port,
                                  flags, trk->flush_mgr.flush_pt);
-
-        if (check_to_hold_packet(pkt, trk->paf_state.paf, trk))
-        {
-                hold_packet(pkt, trk, seg);
-        }
-
         if (*flags & PKT_PURGE)
         {     
             //For HTTP/2 case where stream doesnt flush the data
@@ -10435,69 +9800,6 @@ static inline int CheckFlushPolicyOnData( StreamTcpConfig *config, TcpSession *t
                         "STREAM_FLPOLICY_IGNORE\n"););
             return 0;
 
-        case STREAM_FLPOLICY_FOOTPRINT_IPS_FTP:
-            {
-                int coerce = 0;
-                STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
-                            "STREAM_FLPOLICY_FOOTPRINT-IPS_FTP\n"););
-
-#ifdef NORMALIZER
-                if ( Normalize_GetMode(snort_conf, NORM_TCP_IPS) == NORM_MODE_ON )
-                {
-#ifdef DAQ_PKT_FLAG_SSL_DETECTED
-                    //Do not do FTP-Normalization for FTPS traffic
-                    if((p->pkth->flags & DAQ_PKT_FLAG_SSL_DETECTED) || (p->pkth->flags & DAQ_PKT_FLAG_SSL_SHELLO))
-                    {
-                        tcpssn->pp_flags |= PP_FTPTELNET_FTPS;
-                        listener->flush_mgr.last_size = 0;
-                    }
-#endif
-                    if(!(tcpssn->pp_flags & PP_FTPTELNET_FTPS))
-                    {
-                        if(!listener->flush_mgr.last_size)
-                        {
-                            //Rely on mss if it exists, else use snaplen
-                            if((tcpssn->client.mss > 0) && (tcpssn->server.mss > 0))
-                            {
-                                uint32_t ftp_data_conn_mss = (tcpssn->client.mss < tcpssn->server.mss) ? tcpssn->client.mss : tcpssn->server.mss;
-                                listener->flush_mgr.last_size = ftp_data_conn_mss - p->tcp_options_len;
-                            }
-                            else
-                                listener->flush_mgr.last_size = pkt_snaplen - (p->data - p->pkt);
-                        }
-                        coerce = CheckFTPFlushCoercion(p, &listener->flush_mgr);
-                        if(coerce)
-                            CallFTPFlushProcessor(p);
-                        listener->flush_mgr.flush = false;
-                        talker->flush_mgr.flush = false;
-                    }
-                    if(!coerce)
-                    {
-                        if(tcpssn->pp_flags & PP_FTPTELNET_FTPS)
-                            coerce = CheckFlushCoercion(p, &listener->flush_mgr, listener->tcp_policy->flush_factor);
-                        avail = get_q_sequenced(listener);
-
-                        if (
-                                (avail > 0) &&
-                                (coerce || (avail >= listener->flush_mgr.flush_pt) ||
-                                 (avail && talker->s_mgr.state == TCP_STATE_FIN_WAIT_1))
-                           ) {
-                            uint32_t dir = GetForwardDir(p);
-
-                            if ( talker->s_mgr.state == TCP_STATE_FIN_WAIT_1 )
-                                listener->flags |= TF_FORCE_FLUSH;
-
-                            flushed = flush_to_seq(
-                                    tcpssn, listener, avail, p,
-                                    GET_SRC_IP(p), GET_DST_IP(p),
-                                    p->tcph->th_sport, p->tcph->th_dport, dir);
-                        }
-                    }
-                }
-#endif
-            }
-            break;
-
         case STREAM_FLPOLICY_FOOTPRINT_IPS:
             {
                 int coerce;
@@ -10507,6 +9809,43 @@ static inline int CheckFlushPolicyOnData( StreamTcpConfig *config, TcpSession *t
                 avail = get_q_sequenced(listener);
                 coerce = CheckFlushCoercion(
                         p, &listener->flush_mgr, listener->tcp_policy->flush_factor);
+
+#ifdef NORMALIZER
+                if (( Normalize_GetMode(snort_conf, NORM_TCP_IPS) == NORM_MODE_ON ) &&
+                                            ( Normalize_GetMode(snort_conf, NORM_FTP_DATA) == NORM_MODE_ON ))
+                {
+#ifdef DAQ_PKT_FLAG_SSL_DETECTED
+                    //Do not do FTP-Normalization for FTPS traffic
+                    if((p->pkth->flags & DAQ_PKT_FLAG_SSL_DETECTED) || (p->pkth->flags & DAQ_PKT_FLAG_SSL_SHELLO))
+                        tcpssn->scb->proto_flags &= ~(PROTO_FTP_DATA_NORMALIZE);
+#endif
+
+                    if((tcpssn->scb->proto_flags & PROTO_FTP_DATA_NORMALIZE) &&
+                            ( DAQ_GetInterfaceMode(p->pkth) == DAQ_MODE_INLINE ) && !ScNapInlineTestMode())
+                    {
+                        if(tdb->end_seq < listener->r_nxt_ack)
+                        {
+                            //This means we trimmed a packet and we received the next packet and then got re-xmitted trimmed packet
+                            //Do not TRIM again
+                            tcpssn->scb->ftp_num_packets_normalized = 0;
+                        }
+                        else
+                        {
+                            uint32_t client_ftp_data_len_mss = tcpssn->client.mss - p->tcp_options_len;
+                            uint32_t server_ftp_data_len_mss = tcpssn->server.mss - p->tcp_options_len;
+
+                            if((p->dsize != client_ftp_data_len_mss) && (p->dsize != server_ftp_data_len_mss) &&
+                                    ((p->dsize < client_ftp_data_len_mss) || (p->dsize < server_ftp_data_len_mss)))
+                            {
+                                NormalTrimPayload(p, 0, tdb); //Trim packet with dsize < mss. Send empty ACK
+                                if(TCP_ISFLAGSET( p->tcph, ( TH_PUSH | TH_ACK )))
+                                    ((TCPHdr*)p->tcph)->th_flags &= ~TH_PUSH;
+                                tcpssn->scb->ftp_num_packets_normalized++;
+                            }
+                        }
+                    }
+                }
+#endif
 
                 if (
                         (avail > 0) &&
@@ -10605,14 +9944,7 @@ static inline int CheckFlushPolicyOnData( StreamTcpConfig *config, TcpSession *t
                     }
                     // if this payload is exactly one pdu, don't
                     // actually flush, just use the raw packet
-
-                    /*
-                     * For pseudo flush case, fall back to the regular
-                     * flush routine which takes care of handling
-                     * pseudo flush case.
-                     */
-                    else if (!(p->packet_flags & PKT_PSEUDO_FLUSH) &&
-                         listener->seglist_next &&
+                    else if ( listener->seglist_next &&
                         (tdb->seq == listener->seglist_next->seq) &&
                         (flush_amt == listener->seglist_next->size) &&
                         (flush_amt == p->dsize) )
@@ -10623,13 +9955,6 @@ static inline int CheckFlushPolicyOnData( StreamTcpConfig *config, TcpSession *t
                             listener->flush_count++;
                         }
                         p->packet_flags |=  flags & PKT_PDU_FULL;
-                        /* Raw packet with only and complete http-post header is set with PKT_EVAL_DROP, 
-                         * it will be used to evalute drop/allow packet by preprocs  
-                         */
-                        if (listener->paf_state.fpt_eoh) 
-                        {
-                            p->packet_flags |= PKT_EVAL_DROP;
-                        }
                         ShowRebuiltPacket(p);
                     }
                     else
@@ -10644,13 +9969,7 @@ static inline int CheckFlushPolicyOnData( StreamTcpConfig *config, TcpSession *t
                     if ( !this_flush )
                         break;
 
-                    if(listener->paf_state.fpt_eoh)
-                    {
-                        listener->paf_state.fpt_eoh = 0;
-                        tcpssn->pp_flags &= ~(PP_HTTPINSPECT_PAF_FLUSH_POST_HDR);
-                    }
-                    else
-                        flushed += this_flush;
+                    flushed += this_flush;
                     flags = GetForwardDir(p);
                     flush_amt = flush_pdu_ips( config, tcpssn, listener, p, &flags);
                 }
@@ -10672,7 +9991,7 @@ static inline int CheckFlushPolicyOnData( StreamTcpConfig *config, TcpSession *t
             break;
     }
     listener->paf_state.fpt_eoh = 0;
-    tcpssn->pp_flags &= ~(PP_HTTPINSPECT_PAF_FLUSH_POST_HDR);
+    tcpssn->scb->proto_flags &= ~(PROTO_HTTP_PAF_FLUSH_POST_HDR);
     return flushed;
 }
 #endif
@@ -10915,7 +10234,7 @@ static int CheckFlushPolicyOnAck( StreamTcpConfig *config, TcpSession *tcpssn,
                     else if(talker->paf_state.fpt_eoh)
                     {
                         talker->paf_state.fpt_eoh = 0;
-                        tcpssn->pp_flags &= ~(PP_HTTPINSPECT_PAF_FLUSH_POST_HDR);
+                        tcpssn->scb->proto_flags &= ~(PROTO_HTTP_PAF_FLUSH_POST_HDR);
                         flags = GetReverseDir(p);
                         flush_amt = flush_pdu_ackd( config, tcpssn, talker, p, &flags);
                         continue;
@@ -10961,7 +10280,6 @@ static int CheckFlushPolicyOnAck( StreamTcpConfig *config, TcpSession *tcpssn,
 
 #ifdef NORMALIZER
         case STREAM_FLPOLICY_FOOTPRINT_IPS:
-        case STREAM_FLPOLICY_FOOTPRINT_IPS_FTP:
         case STREAM_FLPOLICY_PROTOCOL_IPS:
             purge_flushed_ackd(tcpssn, talker);
             break;
@@ -11063,41 +10381,22 @@ static int StreamSeglistDeleteNodeTrim (
 {
     assert(st && seg);
 
-    /*urgent data is never sent flushed to preprocessors, hence avoid trimming segment having urg_offset >=1*/
-    if( (seg->seq + seg->size - seg->urg_offset) > flush_seq )
+    if ( s5_paf_active(&st->paf_state) &&
+            ((seg->seq + seg->size) > flush_seq) )
     {
-        /* If PAF is applicable and paf_state is set, we need to trim the segment when
-         * we receive ACK for data less than the segment size.
-         */
-        if( s5_paf_active(&st->paf_state) )
-        {
-             uint32_t delta = flush_seq - seg->seq;
+        uint32_t delta = flush_seq - seg->seq;
 
-             if ( delta < seg->size )
-             {
-                  STREAM_DEBUG_WRAP( DebugMessage(DEBUG_STREAM_STATE,
-                             "Left-Trimming segment at seq %X, len %d, delta %u\n",
-                             seg->seq, seg->size, delta););
-
-                  seg->seq = flush_seq;
-                  seg->size -= (uint16_t)delta;
-                  seg->payload += delta;
-                  st->seg_bytes_logical -= delta;
-                  return 0;
-             }
-        }
-        /* If PAF is not applicable return without trim and delete when ACK is received for data
-         * less than segment size.
-         */
-        else
+        if ( delta < seg->size )
         {
-            /* If paf_state is PAF_ABORT and we receive ACK for bytes less than the segment size,
-             * do not trim and do not delete from queue till we recive the ACK for remaining bytes.
-             * example - FTP Data Session is always in default state which is PAF_ABORT, because PAF
-             * is not applicable for FTP DATA, in this case if we receive ACK for data less than the
-             * segment size, we should not trim OR delete this node till we get the ACK for complete
-             * segment. */
-             return 0;
+            STREAM_DEBUG_WRAP( DebugMessage(DEBUG_STREAM_STATE,
+                        "Left-Trimming segment at seq %X, len %d, delta %u\n",
+                        seg->seq, seg->size, delta););
+
+            seg->seq = flush_seq;
+            seg->size -= (uint16_t)delta;
+            seg->payload += delta;
+            st->seg_bytes_logical -= delta;
+            return 0;
         }
     }
     return StreamSeglistDeleteNode(st, seg);
@@ -11152,18 +10451,16 @@ void TcpUpdateDirection(SessionControlBlock *ssn, char dir,
 int GetTcpRebuiltPackets(Packet *p, SessionControlBlock *ssn, PacketIterator callback, void *userdata)
 {
     int packets = 0;
-    TcpSession *tcpssn = NULL;
+    TcpSession *tcpssn = (TcpSession *)ssn->proto_specific_data->data;
     StreamTracker *st;
     StreamSegment *ss;
     uint32_t start_seq = ntohl(p->tcph->th_seq);
     uint32_t end_seq = start_seq + p->dsize;
 
-    if (!ssn || !ssn->proto_specific_data || !ssn->proto_specific_data->data)
+    if (!tcpssn)
     {
         return packets;
     }
-
-    tcpssn = (TcpSession *)ssn->proto_specific_data->data;
 
     /* StreamTracker is the opposite of the ip of the reassembled
      * packet --> it came out the queue for the other side */
@@ -11181,7 +10478,7 @@ int GetTcpRebuiltPackets(Packet *p, SessionControlBlock *ssn, PacketIterator cal
 
     // return flushed segments only
     // For HTTP Post request End-of-Header Flush, if alert is raised, return the segments even though they are not buffered.
-    for (; ss && ((ss->buffered == SL_BUF_FLUSHED) || (tcpssn->pp_flags & PP_HTTPINSPECT_PAF_FLUSH_POST_HDR)); ss = ss->next)
+    for (; ss && ((ss->buffered == SL_BUF_FLUSHED) || (tcpssn->scb->proto_flags & PROTO_HTTP_PAF_FLUSH_POST_HDR)); ss = ss->next)
     {
         if (SEQ_GEQ(ss->seq,start_seq) && SEQ_LT(ss->seq, end_seq))
         {
@@ -11208,16 +10505,14 @@ int GetTcpStreamSegments(Packet *p, SessionControlBlock *ssn, StreamSegmentItera
         void *userdata)
 {
     int packets = 0;
-    TcpSession *tcpssn = NULL;
+    TcpSession *tcpssn = (TcpSession *)ssn->proto_specific_data->data;
     StreamTracker *st;
     StreamSegment *ss;
     uint32_t start_seq = ntohl(p->tcph->th_seq);
     uint32_t end_seq = start_seq + p->dsize;
 
-    if (!ssn || !ssn->proto_specific_data || !ssn->proto_specific_data->data)
+    if (tcpssn == NULL)
         return -1;
-
-    tcpssn = (TcpSession *)ssn->proto_specific_data->data;
 
     /* StreamTracker is the opposite of the ip of the reassembled
      * packet --> it came out the queue for the other side */
@@ -11231,7 +10526,7 @@ int GetTcpStreamSegments(Packet *p, SessionControlBlock *ssn, StreamSegmentItera
 
     // return flushed segments only
     // For HTTP Post request End-of-Header Flush, if alert is raised, return the segments even though they are not buffered.
-    for (; ss && ((ss->buffered == SL_BUF_FLUSHED) || (tcpssn->pp_flags & PP_HTTPINSPECT_PAF_FLUSH_POST_HDR)); ss = ss->next)
+    for (; ss && ((ss->buffered == SL_BUF_FLUSHED) || (tcpssn->scb->proto_flags & PROTO_HTTP_PAF_FLUSH_POST_HDR)); ss = ss->next)
     {
         if (SEQ_GEQ(ss->seq,start_seq) && SEQ_LT(ss->seq, end_seq))
         {
@@ -11401,7 +10696,6 @@ void StreamSetExtraDataTcp (SessionControlBlock* scb, Packet* p, uint32_t xid)
         st = &tcpssn->client;
 
     st->xtradata_mask |= BIT(xid);
-    p->xtradata_mask |= BIT(xid);
 }
 
 void StreamClearExtraDataTcp (SessionControlBlock* scb, Packet* p, uint32_t xid)
@@ -11553,7 +10847,7 @@ char StreamSetReassemblyTcp(SessionControlBlock *scb, uint8_t flush_policy, char
             }
             else
             {
-                InitFlushMgr(snort_conf, &tcpssn->server.flush_mgr,
+                InitFlushMgr(&tcpssn->server.flush_mgr,
                         &tcpssn->server.tcp_policy->flush_point_list,
                         flush_policy, 0);
                 tcpssn->server.flags |= tmp_flags;
@@ -11571,7 +10865,7 @@ char StreamSetReassemblyTcp(SessionControlBlock *scb, uint8_t flush_policy, char
             }
             else
             {
-                InitFlushMgr(snort_conf, &tcpssn->client.flush_mgr,
+                InitFlushMgr(&tcpssn->client.flush_mgr,
                         &tcpssn->client.tcp_policy->flush_point_list,
                         flush_policy, 0);
                 tcpssn->client.flags |= tmp_flags;
@@ -11583,52 +10877,18 @@ char StreamSetReassemblyTcp(SessionControlBlock *scb, uint8_t flush_policy, char
     {
         if (dir & SSN_DIR_TO_SERVER)
         {
-            //If the flush policy is already set to STREAM_FLPOLICY_FOOTPRINT_IPS_FTP, ssl preproc shouldn't reset the flush policy for FTPS.
-            //Unset the pp_flags because SSL will send decrypted FTP traffic from here on
-            if((tcpssn->pp_flags & PP_FTPTELNET_FTPS) && (tcpssn->server.flush_mgr.flush_policy == STREAM_FLPOLICY_FOOTPRINT_IPS_FTP))
-            {
-                flush_policy = STREAM_FLPOLICY_FOOTPRINT_IPS_FTP;
-                tcpssn->pp_flags &= ~PP_FTPTELNET_FTPS;
-            }
-
-            InitFlushMgr(snort_conf, &tcpssn->server.flush_mgr,
+            InitFlushMgr(&tcpssn->server.flush_mgr,
                     &tcpssn->server.tcp_policy->flush_point_list,
                     flush_policy, 0);
             tcpssn->server.flags |= tmp_flags;
-            if(tcpssn->server.flush_mgr.flush_policy == STREAM_FLPOLICY_FOOTPRINT_IPS)
-            {
-                //set_application_data is done for ftp-data connection during TCPSession setup. Change the Flush policy for ftp-data only.
-                if(session_api->get_application_data(scb, PP_FTPTELNET))
-                {
-                    tcpssn->server.flush_mgr.flush_policy = STREAM_FLPOLICY_FOOTPRINT_IPS_FTP;
-                    tcpssn->server.flush_mgr.last_size = 0;
-                }
-            }
         }
 
         if (dir & SSN_DIR_TO_CLIENT)
         {
-            //If the flush policy is already set to STREAM_FLPOLICY_FOOTPRINT_IPS_FTP, ssl preproc shouldn't reset the flush policy for FTPS.
-            //Unset the pp_flags because SSL will send decrypted FTP traffic from here on
-            if((tcpssn->pp_flags & PP_FTPTELNET_FTPS) && (tcpssn->client.flush_mgr.flush_policy == STREAM_FLPOLICY_FOOTPRINT_IPS_FTP))
-            {
-                flush_policy = STREAM_FLPOLICY_FOOTPRINT_IPS_FTP;
-                tcpssn->pp_flags &= ~PP_FTPTELNET_FTPS;
-            }
-
-            InitFlushMgr(snort_conf, &tcpssn->client.flush_mgr,
+            InitFlushMgr(&tcpssn->client.flush_mgr,
                     &tcpssn->client.tcp_policy->flush_point_list,
                     flush_policy, 0);
             tcpssn->client.flags |= tmp_flags;
-            if(tcpssn->client.flush_mgr.flush_policy == STREAM_FLPOLICY_FOOTPRINT_IPS)
-            {
-                //set_application_data is done for ftp-data connection during TCPSession setup. Change the Flush policy for ftp-data only.
-                if(session_api->get_application_data(scb, PP_FTPTELNET))
-                {
-                    tcpssn->client.flush_mgr.flush_policy = STREAM_FLPOLICY_FOOTPRINT_IPS_FTP;
-                    tcpssn->client.flush_mgr.last_size = 0;
-                }
-            }
         }
     }
 
@@ -11775,8 +11035,7 @@ int s5TcpStreamSizeInit(struct _SnortConfig *sc, char *name, char *parameters, v
                 file_name, file_line, name);
     }
 
-    ssod = SnortPreprocAlloc(1, sizeof(StreamSizeOptionData), PP_STREAM,
-                    PP_MEM_CATEGORY_CONFIG);
+    ssod = SnortAlloc(sizeof(StreamSizeOptionData));
 
     if (!ssod)
     {
@@ -11982,8 +11241,7 @@ void s5TcpStreamSizeCleanup(void *dataPtr)
     StreamSizeOptionData *ssod = dataPtr;
     if (ssod)
     {
-        SnortPreprocFree(ssod, sizeof(StreamSizeOptionData), PP_STREAM,
-                         PP_MEM_CATEGORY_CONFIG);
+        free(ssod);
     }
 }
 
@@ -12008,8 +11266,7 @@ int s5TcpStreamReassembleRuleOptionInit(struct _SnortConfig *sc, char *name, cha
                 file_name, file_line, name);
     }
 
-    srod = SnortPreprocAlloc(1, sizeof(StreamReassembleRuleOptionData), PP_STREAM,
-                        PP_MEM_CATEGORY_CONFIG);
+    srod = SnortAlloc(sizeof(StreamReassembleRuleOptionData));
 
     if (!srod)
     {
@@ -12136,8 +11393,7 @@ void s5TcpStreamReassembleRuleOptionCleanup(void *dataPtr)
     StreamReassembleRuleOptionData *srod = dataPtr;
     if (srod)
     {
-        SnortPreprocFree(srod, sizeof(StreamReassembleRuleOptionData),
-                 PP_STREAM, PP_MEM_CATEGORY_CONFIG);
+        free(srod);
     }
 }
 
@@ -12236,26 +11492,6 @@ static void policyDecoderFlagsRestore(int policyId)
         pPolicy->decoder_drop_flags_saved = 0;
     }
 }
-static void policyChecksumFlagsSaveNClear(int policyId)
-{
-    SnortPolicy *pPolicy = snort_conf->targeted_policies[policyId];
-
-    if (pPolicy)
-    {
-        pPolicy->checksum_flags_saved = pPolicy->checksum_flags;
-        pPolicy->checksum_flags = 0;
-    }
-}
-
-static void policyChecksumFlagsRestore(int policyId)
-{
-    SnortPolicy *pPolicy = snort_conf->targeted_policies[policyId];
-
-    if (pPolicy)
-    {
-        pPolicy->checksum_flags = pPolicy->checksum_flags_saved;
-    }
-}
 
 typedef struct network_reassembly_ports
 {
@@ -12278,17 +11514,12 @@ static void freeNrpNode( void *data )
         NetworkReassemblyPorts *nrp = ( NetworkReassemblyPorts * ) data;
         if( nrp->ip != NULL )
             free( nrp->ip );
-        SnortPreprocFree( data, sizeof( NetworkReassemblyPorts ),
-               PP_STREAM, PP_MEM_CATEGORY_CONFIG );
+        free( data );
     }
 }
 
 static void StreamCreateReassemblyPortList( void )
 {
-    //In SnortInit, we call ConfigurePreprocessors twice. The allocations done first need to be freed
-    if(targeted_nrps.size > 0)
-        StreamDestoryReassemblyPortList();
-
     sf_sdlist_init( &targeted_nrps, &freeNrpNode );
 }
 
@@ -12299,8 +11530,7 @@ static void StreamDestoryReassemblyPortList( void )
 
 static NetworkReassemblyPorts *initNetworkPortReassembly( sfcidr_t *ip, unsigned short port, int ra_dir )
 {
-    NetworkReassemblyPorts *nrp = SnortPreprocAlloc( 1, sizeof( NetworkReassemblyPorts ),
-                                     PP_STREAM, PP_MEM_CATEGORY_CONFIG );
+    NetworkReassemblyPorts *nrp = calloc( 1, sizeof( NetworkReassemblyPorts ) );
 
     if( nrp == NULL )
     {
@@ -12448,8 +11678,7 @@ void enableTargetedPolicyReassemblyPorts( StreamConfig *config )
         {
             // no existing policy for this network...create a new one by cloning
             // the default policy
-            policy = StreamTcpPolicyClone( config->tcp_config->default_policy, 
-                                           config );
+            policy = StreamTcpPolicyClone( config->tcp_config->default_policy );
         }
 
         // init the ports registered specifically for this network...
@@ -12474,15 +11703,14 @@ void enableTargetedPolicyReassemblyPorts( StreamConfig *config )
 void enableRegisteredPortsForReassembly( struct _SnortConfig *sc )
 {
     int idx;
-    tSfPolicyUserContextId stream_cfg = (stream_parsing_config)? stream_parsing_config : stream_online_config;
-    StreamConfig *config = (StreamConfig *) sfPolicyUserDataGet(stream_cfg, getParserPolicy(sc));
+    StreamConfig *config = (StreamConfig *) sfPolicyUserDataGet(stream_online_config, getParserPolicy(sc));
 
     // Since stream configs are inherited from the default,
     // we should attempt to fetch the default policy config
     // if the non-default lookup failed
     if (!config && getParserPolicy(sc) != getDefaultPolicy())
         config = (StreamConfig *) sfPolicyUserDataGet(
-            stream_cfg,
+            stream_online_config,
             getDefaultPolicy()
         );
 
@@ -12511,21 +11739,6 @@ void enableRegisteredPortsForReassembly( struct _SnortConfig *sc )
     // free memory used to cache the requests...
     StreamDestoryReassemblyPortList( );
 }
-
-
-void SetFTPFileLocation(void *scbptr ,bool flush)
-{
-  SessionControlBlock *scb = ( SessionControlBlock * ) scbptr;
-  TcpSession * tcpssn;
-
-  if ( scb  && scb->proto_specific_data && scb->proto_specific_data->data)
-  {
-    tcpssn = (TcpSession *)scb->proto_specific_data->data;
-    tcpssn->client.flush_mgr.flush = flush;
-    tcpssn->server.flush_mgr.flush = flush;
-  }
-}
-
 
 void unregisterPortForReassembly( char *network, uint16_t port, int ra_dir )
 {
@@ -12562,73 +11775,3 @@ void StreamSetSessionHttp2UpgTcp( SessionControlBlock *scb )
 {
     scb->ha_state.session_flags |= SSNFLAG_HTTP_2_UPG;
 }
-
-#ifdef SNORT_RELOAD
-void SessionTCPReload(uint32_t max_sessions, uint16_t pruningTimeout, uint16_t nominalTimeout)
-{
-    SessionReload(tcp_lws_cache, max_sessions, pruningTimeout, nominalTimeout
-#ifdef REG_TEST
-                  , "TCP"
-#endif
-                  );
-}
-
-unsigned SessionTCPReloadAdjust(unsigned maxWork)
-{
-    return SessionProtocolReloadAdjust(tcp_lws_cache, session_configuration->max_tcp_sessions,
-                                       maxWork, session_configuration->memcap
-#ifdef REG_TEST
-                                       , "TCP"
-#endif
-                                       );
-}
-#endif
-
-#ifdef HAVE_DAQ_DECRYPTED_SSL
-int StreamSimulatePeerTcpAckp( SessionControlBlock *scb, uint8_t dir, uint32_t tcp_payload_len )
-{
-
-    StreamTracker *talker = NULL;
-    StreamTracker *listener = NULL;
-    TcpSession *tcpssn = NULL;
-
-    if ((tcp_payload_len == 0) || !scb)
-    {
-        STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
-                          "Stream: no SCB %p or zero length %d \n", scb, tcp_payload_len););
-        return -1;
-    }
-    if (scb->proto_specific_data)
-        tcpssn = (TcpSession *)scb->proto_specific_data->data;
-    if (!tcpssn) {
-        STREAM_DEBUG_WRAP(DebugMessage(DEBUG_STREAM_STATE,
-                          "Stream: no tcpssn \n"););
-        return -1;
-    }
-
-    if (dir == 0)
-    {
-        // Packet from Server. (p->packet_flags & PKT_FROM_SERVER) is TRUE.
-        talker = &tcpssn->server;
-        listener = &tcpssn->client;
-    } else
-    {
-        talker = &tcpssn->client;
-        listener = &tcpssn->server;
-    }
-    talker->l_unackd += tcp_payload_len;
-    listener->r_win_base += tcp_payload_len;
-    purge_flushed_ackd(tcpssn, listener);
-
-    return 0;
-}
-#endif
-
-size_t get_tcp_used_mempool()
-{
-    if (tcp_lws_cache && tcp_lws_cache->protocol_session_pool)
-        return tcp_lws_cache->protocol_session_pool->used_memory;
-    
-    return 0;
-}
-

@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -28,7 +28,6 @@
 #include "flow.h"
 #include "serviceConfig.h"
 #include "appIdConfig.h"
-#include "thirdparty_appid_utils.h"
 struct _SERVICE_MATCH;
 
 void CleanupServices(tAppIdConfig *pConfig);
@@ -58,26 +57,25 @@ void ServiceRegisterPatternDetector(RNAServiceValidationFCN fcn,
                                     u_int8_t proto, const u_int8_t *pattern, unsigned size,
                                     int position, struct _Detector *userdata,
                                     const char *name);
-int AppIdDiscoverService(SFSnortPacket *p, APPID_SESSION_DIRECTION direction, tAppIdData *rnaData, const tAppIdConfig *pConfig);
+int AppIdDiscoverService(SFSnortPacket *p, int direction, tAppIdData *rnaData, const tAppIdConfig *pConfig);
 tAppId getPortServiceId(uint8_t proto, uint16_t port, const tAppIdConfig *pConfig);
-tAppId getProtocolServiceId(uint8_t proto, const tAppIdConfig *pConfig);
 
 void AppIdFreeServiceIDState(AppIdServiceIDState *id_state);
 
 int AppIdServiceAddService(tAppIdData*flow, const SFSnortPacket *pkt, int dir,
                            const tRNAServiceElement *svc_element,
                            tAppId appId, const char *vendor, const char *version,
-                           const RNAServiceSubtype *subtype, AppIdServiceIDState *id_state);
+                           const RNAServiceSubtype *subtype);
 int AppIdServiceAddServiceSubtype(tAppIdData*flow, const SFSnortPacket *pkt, int dir,
                                   const tRNAServiceElement *svc_element,
                                   tAppId appId, const char *vendor, const char *version,
-                                  RNAServiceSubtype *subtype, AppIdServiceIDState *id_state);
+                                  RNAServiceSubtype *subtype);
 int AppIdServiceInProcess(tAppIdData*flow, const SFSnortPacket *pkt, int dir,
-                          const tRNAServiceElement *svc_element, AppIdServiceIDState *id_state);
+                          const tRNAServiceElement *svc_element);
 int AppIdServiceIncompatibleData(tAppIdData*flow, const SFSnortPacket *pkt, int dir,
-                                 const tRNAServiceElement *svc_element, unsigned flow_data_index, const tAppIdConfig *pConfig, AppIdServiceIDState *id_state);
+                                 const tRNAServiceElement *svc_element, unsigned flow_data_index, const tAppIdConfig *pConfig);
 int AppIdServiceFailService(tAppIdData*flow, const SFSnortPacket *pkt, int dir,
-                            const tRNAServiceElement *svc_element, unsigned flow_data_index, const tAppIdConfig *pConfig, AppIdServiceIDState *id_state);
+                            const tRNAServiceElement *svc_element, unsigned flow_data_index, const tAppIdConfig *pConfig);
 int AddFTPServiceState(tAppIdData *fp);
 void AppIdFreeDhcpInfo(DHCPInfo *dd);
 void AppIdFreeSMBData(FpSMBData *sd);
@@ -85,7 +83,7 @@ void AppIdFreeDhcpData(DhcpFPData *dd);
 
 void dumpPorts(FILE *stream, const tAppIdConfig *pConfig);
 
-tRNAServiceElement *ServiceGetServiceElement(RNAServiceValidationFCN fcn, struct _Detector *userdata, tAppIdConfig *pConfig);
+const tRNAServiceElement *ServiceGetServiceElement(RNAServiceValidationFCN fcn, struct _Detector *userdata, tAppIdConfig *pConfig);
 
 extern tRNAServiceValidationModule *active_service_list;
 
@@ -102,51 +100,25 @@ static inline bool compareServiceElements(const tRNAServiceElement *first, const
     return (first->validate != second->validate || first->userdata != second->userdata);
 }
 
-// change UNIT_TESTING and UNIT_TEST_FIRST_DECRYPTED_PACKET in appIdApi.h
 static inline uint32_t AppIdServiceDetectionLevel(tAppIdData * session)
 {
     if (getAppIdFlag(session, APPID_SESSION_DECRYPTED)) return 1;
-#ifdef UNIT_TESTING
-    if (session->session_packet_count >= UNIT_TEST_FIRST_DECRYPTED_PACKET)
-        return 1;
-#endif
     return 0;
 }
 
-static inline void PopulateExpectedFlow(tAppIdData* parent, tAppIdData* expected, uint64_t flags, APPID_SESSION_DIRECTION dir)
+static inline void PopulateExpectedFlow(tAppIdData* parent, tAppIdData* expected, uint64_t flags)
 {
-    if (dir == APP_ID_FROM_INITIATOR)
-    {
-        setAppIdFlag(expected, flags |
-                     getAppIdFlag(parent,
-                                  APPID_SESSION_RESPONDER_MONITORED |
-                                  APPID_SESSION_INITIATOR_MONITORED |
-                                  APPID_SESSION_SPECIAL_MONITORED |
-                                  APPID_SESSION_RESPONDER_CHECKED |
-                                  APPID_SESSION_INITIATOR_CHECKED |
-                                  APPID_SESSION_DISCOVER_APP |
-                                  APPID_SESSION_DISCOVER_USER));
-    }
-    else if (dir == APP_ID_FROM_RESPONDER)
-    {
-        if (getAppIdFlag(parent, APPID_SESSION_INITIATOR_MONITORED))
-           flags |= APPID_SESSION_RESPONDER_MONITORED;
-        if (getAppIdFlag(parent, APPID_SESSION_INITIATOR_CHECKED))
-           flags |= APPID_SESSION_RESPONDER_CHECKED;
-        if (getAppIdFlag(parent, APPID_SESSION_RESPONDER_MONITORED))
-           flags |= APPID_SESSION_INITIATOR_MONITORED;
-        if (getAppIdFlag(parent, APPID_SESSION_RESPONDER_CHECKED))
-           flags |= APPID_SESSION_INITIATOR_CHECKED;
-        setAppIdFlag(expected, flags |
-                     getAppIdFlag(parent, 
-                                  APPID_SESSION_SPECIAL_MONITORED |
-                                  APPID_SESSION_DISCOVER_APP |
-                                  APPID_SESSION_DISCOVER_USER));
-    }
+    setAppIdFlag(expected, flags |
+                 getAppIdFlag(parent,
+                              APPID_SESSION_RESPONDER_MONITORED |
+                              APPID_SESSION_INITIATOR_MONITORED |
+                              APPID_SESSION_SPECIAL_MONITORED |
+                              APPID_SESSION_RESPONDER_CHECKED |
+                              APPID_SESSION_INITIATOR_CHECKED |
+                              APPID_SESSION_DISCOVER_APP |
+                              APPID_SESSION_DISCOVER_USER));
     expected->rnaServiceState = RNA_STATE_FINISHED;
     expected->rnaClientState = RNA_STATE_FINISHED;
-    if (thirdparty_appid_module)
-        thirdparty_appid_module->session_state_set(expected->tpsession, TP_STATE_TERMINATED);
 }
 
 #endif /* __SERVICE_BASE_H__ */

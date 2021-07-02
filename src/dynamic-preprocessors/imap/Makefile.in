@@ -366,7 +366,6 @@ libsf_imap_preproc_la_SOURCES = imap_config.c imap_config.h imap_log.c \
 	snort_imap.c snort_imap.h spp_imap.c spp_imap.h \
 	$(am__append_1)
 EXTRA_DIST = \
-sf_imap.vcxproj \
 sf_imap.dsp
 
 all: all-am

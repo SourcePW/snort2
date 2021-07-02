@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -285,24 +285,24 @@ static int irc_validate(ServiceValidationArgs* args)
         }
     }
 inprocess:
-    irc_service_mod.api->service_inprocess(flowp, args->pkt, dir, &svc_element, NULL);
+    irc_service_mod.api->service_inprocess(flowp, args->pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 success:
     irc_service_mod.api->add_service(flowp, args->pkt, dir, &svc_element,
-                                     APP_ID_IRCD, NULL, NULL, NULL, NULL);
+                                     APP_ID_IRCD, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 fail:
     if (dir == APP_ID_FROM_RESPONDER)
     {
         irc_service_mod.api->fail_service(flowp, args->pkt, dir, &svc_element,
-                                          irc_service_mod.flow_data_index, args->pConfig, NULL);
+                                          irc_service_mod.flow_data_index, args->pConfig);
     }
     else
     {
         irc_service_mod.api->incompatible_data(flowp, args->pkt, dir, &svc_element,
-                                               irc_service_mod.flow_data_index, args->pConfig, NULL);
+                                               irc_service_mod.flow_data_index, args->pConfig);
     }
     return SERVICE_NOMATCH;
 }

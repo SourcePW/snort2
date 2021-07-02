@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -653,13 +653,13 @@ static int rtmp_validate(ServiceValidationArgs* args)
     }
 
     /* Give up if it's taking us too long to figure out this thing. */
-    if (flowp->session_packet_count >= appidStaticConfig->rtmp_max_packets)
+    if (flowp->session_packet_count >= appidStaticConfig.rtmp_max_packets)
     {
         goto fail;
     }
 
 inprocess:
-    rtmp_service_mod.api->service_inprocess(flowp, args->pkt, dir, &svc_element, NULL);
+    rtmp_service_mod.api->service_inprocess(flowp, args->pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 fail:
@@ -667,7 +667,7 @@ fail:
     free(ss->pageUrl);
     ss->swfUrl = ss->pageUrl = NULL;
     rtmp_service_mod.api->fail_service(flowp, args->pkt, dir, &svc_element,
-                                       rtmp_service_mod.flow_data_index, args->pConfig, NULL);
+                                       rtmp_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 
 success:
@@ -696,13 +696,13 @@ success:
             if (!(flowp->hsession = calloc(1, sizeof(*flowp->hsession))))
                 DynamicPreprocessorFatalMessage("Could not allocate httpSession data");
         }
-        if (!appidStaticConfig->referred_appId_disabled && (flowp->hsession->referer == NULL))
+        if (!appidStaticConfig.referred_appId_disabled && (flowp->hsession->referer == NULL))
             flowp->hsession->referer = ss->pageUrl;
         else
             free(ss->pageUrl);
         ss->pageUrl = NULL;
     }
     rtmp_service_mod.api->add_service(flowp, args->pkt, dir, &svc_element,
-                                      APP_ID_RTMP, NULL, NULL, NULL, NULL);
+                                      APP_ID_RTMP, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 }

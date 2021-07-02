@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
- ** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ ** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * ** Copyright (C) 2005-2013 Sourcefire, Inc.
  * ** AUTHOR: Steven Sturges
  * **
@@ -69,19 +69,11 @@ typedef enum {
 #endif
     STREAM_FLPOLICY_FOOTPRINT_NOACK,    /* protocol aware ips */
     STREAM_FLPOLICY_PROTOCOL_NOACK,    /* protocol aware ips */
-#ifdef NORMALIZER
-    STREAM_FLPOLICY_FOOTPRINT_IPS_FTP,   /* protocol agnostic ips for FTP*/
-#endif
 
     STREAM_FLPOLICY_DISABLED,       /* reassembly disabled for this traffic */
 
     STREAM_FLPOLICY_MAX
 } FlushPolicy;
-
-typedef enum _PreprocessorFlags{
-    PP_FTPTELNET_FTPS                      = 0x00000001,
-    PP_HTTPINSPECT_PAF_FLUSH_POST_HDR      = 0x00000002,
-}PreprocessorFlags;
 
 typedef enum {
     PAF_TYPE_SERVICE,
@@ -119,8 +111,6 @@ typedef enum {
     PAF_PERFORMED_LMT_FLUSH, /* previously performed PAF_LIMIT  */
     PAF_DISCARD_START, /*start of the discard point */
     PAF_DISCARD_END, /*end of the discard point */
-    PAF_PSEUDO_FLUSH_SEARCH, /* payload can be pseudo flushed before flushing */
-    PAF_PSEUDO_FLUSH_SKIP, /* HTTP chunked payload can be pseudo flushed */
     PAF_IGNORE,  /* Used for HTTP2.0*/
 } PAF_Status;
 
@@ -167,8 +157,6 @@ typedef  unsigned int ServiceEventType;
 typedef void (*ServiceEventNotifierFunc)(void *ssnptr, ServiceEventType eventType, void *eventData);
 
 typedef void (*Stream_Callback)(Packet *);
-
-typedef void (*FTP_Processor_Flush_Callback)(Packet *p);
 
 struct _ExpectNode;
 typedef struct _stream_api
@@ -478,7 +466,6 @@ typedef struct _stream_api
      *     Session Ptr
      */
     void (*expire_session)(void *);
-    void (*force_delete_session)(void *);
 
     /* register returns a non-zero id for use with set; zero is error */
     unsigned (*register_event_handler)(Stream_Callback);
@@ -619,38 +606,29 @@ typedef struct _stream_api
      */
     void (*set_session_http2_upg)(void *ssn);
 
+    /* function for setting proto_flags
+     *
+     * Parameters
+     *    ssnptr - sesssion pointer
+     *    flags - flags
+     */
+    void (*set_proto_flags)(void* ssnptr, uint32_t flags);
+
+    /* function for unsetting proto_flags
+     *
+     * Parameters
+     *    ssnptr - sesssion pointer
+     *    flags - flags
+     */
+    void (*unset_proto_flags)(void* ssnptr, uint32_t flags);
+
     /* Gets the proto_flags for a session
      *
      * Parameters
      *    ssnptr - sesssion pointer
      */
-    uint32_t (*get_preproc_flags)(void *ssnptr);
+    uint32_t (*get_proto_flags)(void *ssnptr);
 
-    /* Register the FTP Flush callback
-     *
-     * Parameters
-     *   ssnptr - sesssion pointer
-     */
-    int (*register_ftp_flush_cb)(FTP_Processor_Flush_Callback);
-
-    /* set the ftp file position
-     *
-     * parameters
-     *   ssnptr -session pointer
-     *   flage -flush flage
-     */
-    void (*set_ftp_file_position)(void *ssnptr, bool flush);
-
-#ifdef HAVE_DAQ_DECRYPTED_SSL
-    /* Simulate ACK in peer Streamtracker
-     *
-     * Parameters
-     *   ssnptr - sesssion pointer
-     *   dir    - direction to be ACKed in( 0:C to S, 1:S to C )
-     *   len    - Number of bytes to be ACKed
-     */
-    int (*simulate_tcp_akc_in_peer_stream_tracker)(void *ssnptr, uint8_t dir, uint32_t len);
-#endif
 } StreamAPI;
 /* To be set by Stream */
 extern StreamAPI *stream_api;

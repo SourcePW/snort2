@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -99,16 +99,15 @@ static int16_t app_id;
 
 static int tftp_init(const InitServiceAPI * const init_api)
 {
-    unsigned i;
-#ifdef TARGET_BASED
+	unsigned i;
+
     app_id = init_api->dpd->addProtocolReference("tftp");
 
-    for (i=0; i < sizeof(appIdRegistry)/sizeof(*appIdRegistry); i++)
-    {
-        _dpd.debugMsg(DEBUG_LOG,"registering appId: %d\n",appIdRegistry[i].appId);
+	for (i=0; i < sizeof(appIdRegistry)/sizeof(*appIdRegistry); i++)
+	{
+		_dpd.debugMsg(DEBUG_LOG,"registering appId: %d\n",appIdRegistry[i].appId);
         init_api->RegisterAppId(&tftp_validate, appIdRegistry[i].appId, appIdRegistry[i].additionalInfo, init_api->pAppidConfig);
-    }
-#endif
+	}
 
     return 0;
 }
@@ -226,9 +225,9 @@ static int tftp_validate(ServiceValidationArgs* args)
                 tmp_td->state = TFTP_STATE_ERROR;
                 return SERVICE_ENOMEM;
             }
-            PopulateExpectedFlow(flowp, pf, APPID_SESSION_EXPECTED_EVALUATE, APP_ID_FROM_RESPONDER);
+            PopulateExpectedFlow(flowp, pf, APPID_SESSION_EXPECTED_EVALUATE);
             sfaddr_copy_to_raw(&pf->common.initiator_ip, sip);
-            pf->rnaServiceState = RNA_STATE_STATEFUL;
+	    pf->rnaServiceState = RNA_STATE_STATEFUL;
             pf->scan_flags |= SCAN_HOST_PORT_FLAG;
         }
         else
@@ -339,24 +338,24 @@ static int tftp_validate(ServiceValidationArgs* args)
     }
 
 inprocess:
-    tftp_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element, NULL);
+    tftp_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 success:
     if (args->app_id_debug_session_flag)
         _dpd.logMsg("AppIdDbg %s tftp success\n", app_id_debug_session);
     tftp_service_mod.api->add_service(flowp, pkt, dir, &svc_element,
-                                      APP_ID_TFTP, NULL, NULL, NULL, NULL);
+                                      APP_ID_TFTP, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 bail:
     tftp_service_mod.api->incompatible_data(flowp, pkt, dir, &svc_element,
-                                            tftp_service_mod.flow_data_index, args->pConfig, NULL);
+                                            tftp_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOT_COMPATIBLE;
 
 fail:
     tftp_service_mod.api->fail_service(flowp, pkt, dir, &svc_element,
-                                       tftp_service_mod.flow_data_index, args->pConfig, NULL);
+                                       tftp_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 }
 

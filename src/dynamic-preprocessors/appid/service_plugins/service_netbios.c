@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -48,7 +48,7 @@
 #define NBNS_OPCODE_REFRESHALT      9
 #define NBNS_OPCODE_MHREGISTRATION 15
 
-#define NBSS_COUNT_THRESHOLD 2
+#define NBSS_COUNT_THRESHOLD 4
 
 #define NBNS_REPLYCODE_MAX  7
 
@@ -571,23 +571,23 @@ static int nbns_validate(ServiceValidationArgs* args)
 
 success:
     netbios_service_mod.api->add_service(flowp, args->pkt, dir, &nbns_svc_element,
-                                         APP_ID_NETBIOS_NS, NULL, NULL, NULL, NULL);
+                                         APP_ID_NETBIOS_NS, NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 
 inprocess:
-    netbios_service_mod.api->service_inprocess(flowp, args->pkt, dir, &nbns_svc_element, NULL);
+    netbios_service_mod.api->service_inprocess(flowp, args->pkt, dir, &nbns_svc_element);
     return SERVICE_INPROCESS;
 
 fail:
     netbios_service_mod.api->fail_service(flowp, args->pkt, dir, &nbns_svc_element,
                                           netbios_service_mod.flow_data_index,
-                                          args->pConfig, NULL);
+                                          args->pConfig);
     return SERVICE_NOMATCH;
 
 not_compatible:
     netbios_service_mod.api->incompatible_data(flowp, args->pkt, dir, &nbns_svc_element,
                                                netbios_service_mod.flow_data_index,
-                                               args->pConfig, NULL);
+                                               args->pConfig);
     return SERVICE_NOT_COMPATIBLE;
 }
 
@@ -942,7 +942,7 @@ static int nbss_validate(ServiceValidationArgs* args)
                 }
                 else if (tmp >= 4 && nd->length >= 4 &&
                          !(*((uint32_t *)data)) &&
-                         dcerpc_validate(data+4, ((int)min(tmp, nd->length)) - 4) > 0)
+                         !dcerpc_validate(data+4, ((int)min(tmp, nd->length)) - 4) > 0)
                 {
                     nd->serviceAppId = APP_ID_DCE_RPC;
                     nd->miscAppId = APP_ID_NETBIOS_SSN;
@@ -1001,7 +1001,7 @@ static int nbss_validate(ServiceValidationArgs* args)
     if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
     {
         if(netbios_service_mod.api->add_service(flowp, pkt, dir, &nbss_svc_element,
-                             nd->serviceAppId, NULL, NULL, NULL, NULL) == SERVICE_SUCCESS)
+                             nd->serviceAppId, NULL, NULL, NULL) == SERVICE_SUCCESS)
         {
             netbios_service_mod.api->add_misc(flowp, nd->miscAppId);
         }
@@ -1011,7 +1011,7 @@ static int nbss_validate(ServiceValidationArgs* args)
 inprocess:
     if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
     {
-        netbios_service_mod.api->service_inprocess(flowp, pkt, dir, &nbss_svc_element, NULL);
+        netbios_service_mod.api->service_inprocess(flowp, pkt, dir, &nbss_svc_element);
     }
     return SERVICE_INPROCESS;
 
@@ -1019,7 +1019,7 @@ fail:
     if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
     {
         netbios_service_mod.api->fail_service(flowp, pkt, dir, &nbss_svc_element,
-                                              netbios_service_mod.flow_data_index, args->pConfig, NULL);
+                                              netbios_service_mod.flow_data_index, args->pConfig);
     }
     return SERVICE_NOMATCH;
 }
@@ -1130,7 +1130,7 @@ fail:
     {
         netbios_service_mod.api->fail_service(flowp, pkt, dir, &nbdgm_svc_element,
                                               netbios_service_mod.flow_data_index,
-                                              args->pConfig, NULL);
+                                              args->pConfig);
     }
     clearAppIdFlag(flowp, APPID_SESSION_CONTINUE);
     return SERVICE_NOMATCH;
@@ -1141,7 +1141,7 @@ success:
         if (dir == APP_ID_FROM_RESPONDER)
         {
             if(netbios_service_mod.api->add_service(flowp, pkt, dir, &nbdgm_svc_element,
-                                 serviceAppId, NULL, NULL, NULL, NULL) == SERVICE_SUCCESS)
+                                 serviceAppId, NULL, NULL, NULL) == SERVICE_SUCCESS)
             {
                 netbios_service_mod.api->add_misc(flowp, miscAppId);
             }
@@ -1152,7 +1152,7 @@ success:
 inprocess:
     if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
     {
-        netbios_service_mod.api->service_inprocess(flowp, pkt, dir, &nbdgm_svc_element, NULL);
+        netbios_service_mod.api->service_inprocess(flowp, pkt, dir, &nbdgm_svc_element);
     }
     return SERVICE_INPROCESS;
 }

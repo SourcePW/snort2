@@ -345,7 +345,6 @@ libsf_ssh_preproc_la_LDFLAGS = -export-dynamic -module @XCCFLAGS@
 
 libsf_ssh_preproc_la_SOURCES = spp_ssh.c spp_ssh.h $(am__append_1)
 EXTRA_DIST = \
-sf_ssh.vcxproj \
 sf_ssh.dsp
 
 all: all-am

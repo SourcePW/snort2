@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2002-2013 Sourcefire, Inc.
 ** Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 **
@@ -61,8 +61,6 @@ extern PreprocStats ruleOTNEvalPerfStats;
 #ifndef IXDR_GET_LONG
     #define IXDR_GET_LONG IXDR_GET_INT32
 #endif
-
-#define GET_32BITS(buf) (ntohl(*(*(uint32_t **)&(buf))++))
 
 typedef struct _RpcCheckData
 {
@@ -186,7 +184,6 @@ void RpcCheckInit(struct _SnortConfig *sc, char *data, OptTreeNode *otn, int pro
        detect function pointer list */
     fpl = AddOptFuncToList(CheckRpc, otn);
     fpl->type = RULE_OPTION_TYPE_RPC_CHECK;
-    fpl->context = otn->ds_list[PLUGIN_RPC_CHECK];
 }
 
 
@@ -258,6 +255,7 @@ void ParseRpc(struct _SnortConfig *sc, char *data, OptTreeNode *otn)
 
 }
 
+
 /****************************************************************************
  *
  * Function: CheckRpc(char *, OptTreeNode *)
@@ -323,10 +321,10 @@ int CheckRpc(void *option_data, Packet *p)
 #endif
 
     /* Read xid */
-    GET_32BITS(c);
+    (void)IXDR_GET_LONG (c);
 
     /* Read direction : CALL or REPLY */
-    direction = (enum msg_type)GET_32BITS(c);
+    direction = IXDR_GET_ENUM (c, enum msg_type);
 
     /* We only look at calls */
     if(direction != CALL)
@@ -337,7 +335,7 @@ int CheckRpc(void *option_data, Packet *p)
     }
 
     /* Read the RPC message version */
-      rpcvers = GET_32BITS(c);
+    rpcvers = IXDR_GET_LONG (c);
 
     /* Fail if it is not right */
     if(rpcvers != RPC_MSG_VERSION)
@@ -348,9 +346,9 @@ int CheckRpc(void *option_data, Packet *p)
     }
 
     /* Read the program number, version, and procedure */
-    prog = GET_32BITS(c);
-    vers = GET_32BITS(c);
-    proc = GET_32BITS(c); 
+    prog = IXDR_GET_LONG (c);
+    vers = IXDR_GET_LONG (c);
+    proc = IXDR_GET_LONG (c);
 
     DEBUG_WRAP(DebugMessage(DEBUG_PLUGIN,"RPC decoded to: %lu %lu %lu\n",
                             prog,vers,proc););

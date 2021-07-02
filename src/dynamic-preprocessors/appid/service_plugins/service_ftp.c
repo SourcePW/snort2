@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -49,7 +49,6 @@ typedef enum
 {
     FTP_REPLY_BEGIN,
     FTP_REPLY_MULTI,
-    FTP_REPLY_LONG,
     FTP_REPLY_MID
 } FTPReplyState;
 
@@ -126,20 +125,18 @@ static int16_t ftp_data_app_id = 0;
 
 static int ftp_init(const InitServiceAPI * const init_api)
 {
-#ifdef TARGET_BASED
     ftp_data_app_id = init_api->dpd->addProtocolReference("ftp-data");
-#endif
 
     init_api->RegisterPattern(&ftp_validate, IPPROTO_TCP, (uint8_t *)FTP_PATTERN1, sizeof(FTP_PATTERN1)-1, 0, "ftp", init_api->pAppidConfig);
     init_api->RegisterPattern(&ftp_validate, IPPROTO_TCP, (uint8_t *)FTP_PATTERN2, sizeof(FTP_PATTERN2)-1, 0, "ftp", init_api->pAppidConfig);
     init_api->RegisterPattern(&ftp_validate, IPPROTO_TCP, (uint8_t *)FTP_PATTERN3, sizeof(FTP_PATTERN3)-1, -1, "ftp", init_api->pAppidConfig);
     init_api->RegisterPattern(&ftp_validate, IPPROTO_TCP, (uint8_t *)FTP_PATTERN4, sizeof(FTP_PATTERN4)-1, -1, "ftp", init_api->pAppidConfig);
-    unsigned i;
-    for (i=0; i < sizeof(appIdRegistry)/sizeof(*appIdRegistry); i++)
-    {
-        _dpd.debugMsg(DEBUG_LOG,"registering appId: %d\n",appIdRegistry[i].appId);
-        init_api->RegisterAppId(&ftp_validate, appIdRegistry[i].appId, appIdRegistry[i].additionalInfo, init_api->pAppidConfig);
-    }
+	unsigned i;
+	for (i=0; i < sizeof(appIdRegistry)/sizeof(*appIdRegistry); i++)
+	{
+		_dpd.debugMsg(DEBUG_LOG,"registering appId: %d\n",appIdRegistry[i].appId);
+		init_api->RegisterAppId(&ftp_validate, appIdRegistry[i].appId, appIdRegistry[i].additionalInfo, init_api->pAppidConfig);
+	}
 
     return 0;
 }
@@ -306,33 +303,6 @@ static int CheckVendorVersion(const uint8_t *data, uint16_t init_offset,
     return 0;
 }
 
-static int ftp_parse_response(const uint8_t *data, uint16_t *offset,
-                              uint16_t size, ServiceFTPData *fd, FTPReplyState rstate)
-{   
-    for (; *offset < size; (*offset)++)
-    {   
-        if (data[*offset] == 0x0D)
-        {   
-            (*offset)++;
-            if (*offset >= size) return -1;
-            if (data[*offset] == 0x0D)
-            {   
-                (*offset)++;
-                if (*offset >= size) return -1;
-            }
-            if (data[*offset] != 0x0A) return -1;
-            fd->rstate = rstate;
-            break;
-        }
-        if (data[*offset] == 0x0A)
-        {   
-            fd->rstate = rstate;
-            break;
-        }
-    }
-    return 0;
-}
-
 static int ftp_validate_reply(const uint8_t *data, uint16_t *offset,
                               uint16_t size, ServiceFTPData *fd)
 {
@@ -419,25 +389,62 @@ static int ftp_validate_reply(const uint8_t *data, uint16_t *offset,
                 }
             }
 
-	    fd->rstate = FTP_REPLY_MID;
-            if (ftp_parse_response(data, offset, size, fd, tmp_state))
-		return -1;
-	    if (fd->rstate == FTP_REPLY_MID)
-		fd->rstate = FTP_REPLY_LONG;
+            fd->rstate = FTP_REPLY_MID;
+            for (; *offset < size; (*offset)++)
+            {
+                if (data[*offset] == 0x0D)
+                {
+                    (*offset)++;
+                    if (*offset >= size) return -1;
+                    if (data[*offset] == 0x0D)
+                    {
+                        (*offset)++;
+                        if (*offset >= size) return -1;
+                    }
+                    if (data[*offset] != 0x0A) return -1;
+                    fd->rstate = tmp_state;
+                    break;
+                }
+                if (data[*offset] == 0x0A)
+                {
+                    fd->rstate = tmp_state;
+                    break;
+                }
+            }
+            if (fd->rstate == FTP_REPLY_MID) return -1;
             break;
         case FTP_REPLY_MULTI:
             if (size - *offset < (int)sizeof(ServiceFTPCode))
             {
-		fd->rstate = FTP_REPLY_MID;
-		if (ftp_parse_response(data, offset, size, fd, FTP_REPLY_MULTI))
-		    return -1;
-                if (fd->rstate == FTP_REPLY_MID) 
-		    fd->rstate = FTP_REPLY_LONG;
+                fd->rstate = FTP_REPLY_MID;
+                for (; *offset < size; (*offset)++)
+                {
+                    if (data[*offset] == 0x0D)
+                    {
+                        (*offset)++;
+                        if (*offset >= size) return -1;
+                        if (data[*offset] == 0x0D)
+                        {
+                            (*offset)++;
+                            if (*offset >= size) return -1;
+                        }
+                        if (data[*offset] != 0x0A) return -1;
+                        fd->rstate = FTP_REPLY_MULTI;
+                        break;
+                    }
+                    if (data[*offset] == 0x0A)
+                    {
+                        fd->rstate = FTP_REPLY_MULTI;
+                        break;
+                    }
+                }
+                if (fd->rstate == FTP_REPLY_MID) return -1;
             }
             else
             {
                 code_hdr = (ServiceFTPCode *)(data + *offset);
-                if ((code_hdr->sp == ' ' || code_hdr->sp == 0x09) &&
+                if (size - (*offset) >= (int)sizeof(ServiceFTPCode) &&
+                    (code_hdr->sp == ' ' || code_hdr->sp == 0x09) &&
                     code_hdr->code[0] >= '1' && code_hdr->code[0] <= '5' &&
                     code_hdr->code[1] >= '1' && code_hdr->code[1] <= '5' &&
                     isdigit(code_hdr->code[2]))
@@ -452,66 +459,31 @@ static int ftp_validate_reply(const uint8_t *data, uint16_t *offset,
                     }
                 }
                 tmp_state = fd->rstate;
-		fd->rstate = FTP_REPLY_MID;
-		if (ftp_parse_response(data, offset, size, fd, tmp_state))
-		    return -1;
-                if (fd->rstate == FTP_REPLY_MID)
-		   fd->rstate = FTP_REPLY_LONG;
-            }
-            break;
-	case FTP_REPLY_LONG:
-	    fd->rstate = FTP_REPLY_MID;
-	    if (ftp_parse_response(data, offset, size, fd, FTP_REPLY_LONG))
-		return -1;
-            if ((++(*offset)) >= size)
-            {
-                fd->rstate = FTP_REPLY_BEGIN;
-                break;
-            }
-	    if (fd->rstate == FTP_REPLY_MID)
-	    {
-                fd->rstate = FTP_REPLY_LONG;
-		break;
-	    }
-            if (size - *offset < (int)sizeof(ServiceFTPCode))
-            {   
-		fd->rstate = FTP_REPLY_MID;
-		if (ftp_parse_response(data, offset, size, fd, FTP_REPLY_LONG))
-		    return -1;
-                if (fd->rstate == FTP_REPLY_MID)
-                    fd->rstate = FTP_REPLY_LONG;
-            }
-            else
-	    {
-	        code_hdr = (ServiceFTPCode *)(data + *offset);
-                if(code_hdr->code[0] >= '1' && code_hdr->code[0] <= '5' &&
-                    code_hdr->code[1] >= '1' && code_hdr->code[1] <= '5' &&
-                    isdigit(code_hdr->code[2]))
+                fd->rstate = FTP_REPLY_MID;
+                for (; *offset < size; (*offset)++)
                 {
-                    tmp = (code_hdr->code[0] - '0') * 100;
-                    tmp += (code_hdr->code[1] - '0') * 10;
-                    tmp += code_hdr->code[2] - '0';
-                    if (tmp == fd->code)
+                    if (data[*offset] == 0x0D)
                     {
-                        *offset += sizeof(ServiceFTPCode);
-			if (code_hdr->sp == ' ' || code_hdr->sp == 0x09)
-			{
-			    fd->rstate = FTP_REPLY_MID;
-			    if (ftp_parse_response(data, offset, size, fd, FTP_REPLY_BEGIN))
-				return -1;
-			}
-			else if (code_hdr->sp == '-')
-			{
-			    fd->rstate = FTP_REPLY_MID;
-			    if (ftp_parse_response(data, offset, size, fd, FTP_REPLY_MULTI))
-				return -1;
-			}
-			if (fd->rstate == FTP_REPLY_MID)
-                            fd->rstate = FTP_REPLY_LONG;
+                        (*offset)++;
+                        if (*offset >= size) return -1;
+                        if (data[*offset] == 0x0D)
+                        {
+                            (*offset)++;
+                            if (*offset >= size) return -1;
+                        }
+                        if (data[*offset] != 0x0A) return -1;
+                        fd->rstate = tmp_state;
+                        break;
+                    }
+                    if (data[*offset] == 0x0A)
+                    {
+                        fd->rstate = tmp_state;
+                        break;
                     }
                 }
-	    }
-            break;	
+                if (fd->rstate == FTP_REPLY_MID) return -1;
+            }
+            break;
         default:
             return -1;
         }
@@ -772,26 +744,19 @@ static inline void WatchForCommandResult(ServiceFTPData *fd, tAppIdData *flowp, 
     fd->cmd = command;
 }
 
-static inline void CreateExpectedSession(tAppIdData *flowp, SFSnortPacket *ctrlPkt, sfaddr_t *cliIp, uint16_t cliPort,
-                sfaddr_t *srvIp, uint16_t srvPort, uint8_t proto, int flags, APPID_SESSION_DIRECTION dir)
+static inline void InitializeDataSession(tAppIdData *flowp,tAppIdData *fp)
 {
-    tAppIdData *fp;
-
-    fp = ftp_service_mod.api->flow_new(flowp, ctrlPkt, cliIp, cliPort, srvIp, srvPort, proto, ftp_data_app_id, flags);
-    if (fp) // initialize data session
+    unsigned encryptedFlag = getAppIdFlag(flowp, APPID_SESSION_ENCRYPTED | APPID_SESSION_DECRYPTED);
+    if (encryptedFlag == APPID_SESSION_ENCRYPTED)
     {
-        unsigned encryptedFlag = getAppIdFlag(flowp, APPID_SESSION_ENCRYPTED | APPID_SESSION_DECRYPTED);
-        if (encryptedFlag == APPID_SESSION_ENCRYPTED)
-        {
-            fp->serviceAppId = APP_ID_FTPSDATA;
-        }
-        else
-        {
-            encryptedFlag = 0; // change (APPID_SESSION_ENCRYPTED | APPID_SESSION_DECRYPTED) case to zeroes.
-            fp->serviceAppId = APP_ID_FTP_DATA;
-        }
-        PopulateExpectedFlow(flowp, fp, APPID_SESSION_IGNORE_ID_FLAGS | encryptedFlag, dir);
+        fp->serviceAppId = APP_ID_FTPSDATA;
     }
+    else
+    {
+        encryptedFlag = 0; // change (APPID_SESSION_ENCRYPTED | APPID_SESSION_DECRYPTED) case to zeroes.
+        fp->serviceAppId = APP_ID_FTP_DATA;
+    }
+    PopulateExpectedFlow(flowp, fp, APPID_SESSION_IGNORE_ID_FLAGS | encryptedFlag);
 }
 
 static int ftp_validate(ServiceValidationArgs* args)
@@ -807,6 +772,7 @@ static int ftp_validate(ServiceValidationArgs* args)
     int code_index;
     uint32_t address;
     uint16_t port;
+    tAppIdData *fp;
     int retval = SERVICE_INPROCESS;
     tAppIdData *flowp = args->flowp;
     const uint8_t *data = args->data;
@@ -855,8 +821,6 @@ static int ftp_validate(ServiceValidationArgs* args)
                                   size-(sizeof(FTP_PORT_CMD)-1),
                                   &fd->address, &fd->port) == 0)
             {
-                CreateExpectedSession(flowp, pkt, GET_DST_IP(pkt), 0, &fd->address, fd->port, flowp->proto,
-                                      APPID_EARLY_SESSION_FLAG_FW_RULE, APP_ID_FROM_RESPONDER);
                 WatchForCommandResult(fd, flowp, FTP_CMD_PORT_EPRT);
             }
         }
@@ -867,8 +831,6 @@ static int ftp_validate(ServiceValidationArgs* args)
                                   size-(sizeof(FTP_EPRT_CMD)-1),
                                   &fd->address, &fd->port) == 0)
             {
-                CreateExpectedSession(flowp, pkt, GET_DST_IP(pkt), 0, &fd->address, fd->port, flowp->proto,
-                                      APPID_EARLY_SESSION_FLAG_FW_RULE, APP_ID_FROM_RESPONDER);
                 WatchForCommandResult(fd, flowp, FTP_CMD_PORT_EPRT);
             }
         }
@@ -960,13 +922,17 @@ static int ftp_validate(ServiceValidationArgs* args)
                     break;
                 case 234:
                     {
+                        setAppIdFlag(flowp, APPID_SESSION_CONTINUE);
                         retval = SERVICE_SUCCESS;
                         /*
                         // we do not set the state to FTP_STATE_MONITOR here because we don't know
                         // if there will be SSL decryption to allow us to see what we are interested in.
                         // Let the WatchForCommandResult() usage elsewhere take care of it.
                         */
-                        setAppIdFlag(flowp, APPID_SESSION_CONTINUE | APPID_SESSION_ENCRYPTED | APPID_SESSION_STICKY_SERVICE);
+                        setAppIdFlag(flowp,
+                                     APPID_SESSION_CONTINUE |
+                                     APPID_SESSION_ENCRYPTED |
+                                     APPID_SESSION_STICKY_SERVICE);
                     }
                     break;
                 default:
@@ -977,9 +943,7 @@ static int ftp_validate(ServiceValidationArgs* args)
                 switch (code)
                 {
                 case 331:
-                    setAppIdFlag(flowp, APPID_SESSION_CONTINUE);
                     fd->state = FTP_STATE_PASSWORD;
-                    retval = SERVICE_SUCCESS;
                     break;
                 case 332:
                     fd->state = FTP_STATE_ACCOUNT;
@@ -1134,13 +1098,20 @@ static int ftp_validate(ServiceValidationArgs* args)
                         sip = GET_SRC_IP(pkt);
                         addr = htonl(address);
                         sfip_set_raw(&ip, &addr, AF_INET);
-                        CreateExpectedSession(flowp, pkt, dip, 0, &ip, port, flowp->proto,
-                                              APPID_EARLY_SESSION_FLAG_FW_RULE, APP_ID_FROM_INITIATOR);
-
+                        fp = ftp_service_mod.api->flow_new(flowp, pkt, dip, 0, &ip, port, flowp->proto, ftp_data_app_id,
+                                                           APPID_EARLY_SESSION_FLAG_FW_RULE);
+                        if (fp)
+                        {
+                            InitializeDataSession(flowp,fp);
+                        }
                         if (!sfip_fast_eq6(&ip, sip))
                         {
-                            CreateExpectedSession(flowp, pkt, dip, 0, sip, port, flowp->proto,
-                                                  APPID_EARLY_SESSION_FLAG_FW_RULE, APP_ID_FROM_INITIATOR);
+                            fp = ftp_service_mod.api->flow_new(flowp, pkt, dip, 0, sip, port, flowp->proto, ftp_data_app_id,
+                                                               APPID_EARLY_SESSION_FLAG_FW_RULE);
+                            if (fp)
+                            {
+                                InitializeDataSession(flowp,fp);
+                            }
                         }
                         ftp_service_mod.api->add_payload(flowp, APP_ID_FTP_PASSIVE); // Passive mode FTP is reported as a payload id
                     }
@@ -1163,8 +1134,12 @@ static int ftp_validate(ServiceValidationArgs* args)
 
                         dip = GET_DST_IP(pkt);
                         sip = GET_SRC_IP(pkt);
-                        CreateExpectedSession(flowp, pkt, dip, 0, sip, port, flowp->proto,
-                                              APPID_EARLY_SESSION_FLAG_FW_RULE, APP_ID_FROM_INITIATOR);
+                        fp = ftp_service_mod.api->flow_new(flowp, pkt, dip, 0, sip, port, flowp->proto, ftp_data_app_id,
+                                                           APPID_EARLY_SESSION_FLAG_FW_RULE);
+                        if (fp)
+                        {
+                            InitializeDataSession(flowp,fp);
+                        }
                         ftp_service_mod.api->add_payload(flowp, APP_ID_FTP_PASSIVE); // Passive mode FTP is reported as a payload id
                     }
                     else if (code < 0)
@@ -1176,7 +1151,15 @@ static int ftp_validate(ServiceValidationArgs* args)
             case 200:
                 if (fd->cmd == FTP_CMD_PORT_EPRT)
                 {
-                    // Expected session is created on PORT/EPRT command
+                    sfaddr_t *sip;
+
+                    sip = GET_SRC_IP(pkt);
+                    fp = ftp_service_mod.api->flow_new(flowp, pkt, sip, 0, &fd->address, fd->port, flowp->proto, ftp_data_app_id,
+                                                       APPID_EARLY_SESSION_FLAG_FW_RULE);
+                    if (fp)
+                    {
+                        InitializeDataSession(flowp,fp);
+                    }
                     ftp_service_mod.api->add_payload(flowp, APP_ID_FTP_ACTIVE); // Active mode FTP is reported as a payload id
                 }
                 break;
@@ -1198,7 +1181,7 @@ static int ftp_validate(ServiceValidationArgs* args)
 inprocess:
         if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
         {
-            ftp_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element, NULL);
+            ftp_service_mod.api->service_inprocess(flowp, pkt, dir, &svc_element);
         }
         return SERVICE_INPROCESS;
 
@@ -1210,7 +1193,7 @@ inprocess:
                                              encryptedFlag == APPID_SESSION_ENCRYPTED ? // FTPS only when encrypted==1 decrypted==0
                                                 APP_ID_FTPS : APP_ID_FTP_CONTROL,
                                              fd->vendor[0] ? fd->vendor:NULL,
-                                             fd->version[0] ? fd->version:NULL, NULL, NULL);
+                                             fd->version[0] ? fd->version:NULL, NULL);
         }
         return SERVICE_SUCCESS;
 
@@ -1219,7 +1202,7 @@ fail:
         if (!getAppIdFlag(flowp, APPID_SESSION_SERVICE_DETECTED))
         {
             ftp_service_mod.api->fail_service(flowp, pkt, dir, &svc_element,
-                                              ftp_service_mod.flow_data_index, args->pConfig, NULL);
+                                              ftp_service_mod.flow_data_index, args->pConfig);
         }
         clearAppIdFlag(flowp, APPID_SESSION_CONTINUE);
         return SERVICE_NOMATCH;

@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2011-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -59,7 +59,7 @@ extern POPConfig **pop_config;
 extern const POPToken pop_known_cmds[];
 
 /* Private functions */
-static int  ProcessPorts(POPConfig *, char *, int, char **);
+static int  ProcessPorts(POPConfig *, char *, int);
 
 /*
  * Function: POP_ParseArgs(char *)
@@ -78,7 +78,6 @@ void POP_ParseArgs(POPConfig *config, char *args)
 {
     int ret = 0;
     char *arg;
-    char *saveptr;
     char errStr[ERRSTRLEN];
     int errStrLen = ERRSTRLEN;
 
@@ -92,7 +91,7 @@ void POP_ParseArgs(POPConfig *config, char *args)
 
     *errStr = '\0';
 
-    arg = strtok_r(args, CONF_SEPARATORS, &saveptr);
+    arg = strtok(args, CONF_SEPARATORS);
 
     while ( arg != NULL )
     {
@@ -100,21 +99,21 @@ void POP_ParseArgs(POPConfig *config, char *args)
 
         if ( !strcasecmp(CONF_PORTS, arg) )
         {
-            ret = ProcessPorts(config, errStr, errStrLen, &saveptr);
+            ret = ProcessPorts(config, errStr, errStrLen);
         }
         else if ( !strcasecmp(CONF_POP_MEMCAP, arg) )
         {
-            ret = _dpd.checkValueInRange(strtok_r(NULL, CONF_SEPARATORS, &saveptr), CONF_POP_MEMCAP,
+            ret = _dpd.checkValueInRange(strtok(NULL, CONF_SEPARATORS), CONF_POP_MEMCAP,
                     MIN_POP_MEMCAP, MAX_POP_MEMCAP, &value);
             config->memcap = (uint32_t)value;
         }
         else if ( !strcasecmp(CONF_MAX_MIME_MEM, arg) )
         {
-            ret = _dpd.checkValueInRange(strtok_r(NULL, CONF_SEPARATORS, &saveptr), CONF_MAX_MIME_MEM,
+            ret = _dpd.checkValueInRange(strtok(NULL, CONF_SEPARATORS), CONF_MAX_MIME_MEM,
                     MIN_MIME_MEM, MAX_MIME_MEM, &value);
             config->decode_conf.max_mime_mem = (int)value;
         }
-        else if(!_dpd.fileAPI->parse_mime_decode_args(&(config->decode_conf), arg, "POP", &saveptr))
+        else if(!_dpd.fileAPI->parse_mime_decode_args(&(config->decode_conf), arg, "POP"))
         {
             ret = 0;
         }
@@ -146,7 +145,7 @@ void POP_ParseArgs(POPConfig *config, char *args)
         }
 
         /*  Get next token */
-        arg = strtok_r(NULL, CONF_SEPARATORS, &saveptr);
+        arg = strtok(NULL, CONF_SEPARATORS);
     }
 }
 
@@ -302,7 +301,6 @@ void POP_PrintConfig(POPConfig *config)
 **
 **  @param ErrorString error string buffer
 **  @param ErrStrLen   the length of the error string buffer
-**  @param saveptr     the strtok_r saved state
 **
 **  @return an error code integer
 **          (0 = success, >0 = non-fatal error, <0 = fatal error)
@@ -311,7 +309,7 @@ void POP_PrintConfig(POPConfig *config)
 **  @retval -1 generic fatal error
 **  @retval  1 generic non-fatal error
 */
-static int ProcessPorts(POPConfig *config, char *ErrorString, int ErrStrLen, char **saveptr)
+static int ProcessPorts(POPConfig *config, char *ErrorString, int ErrStrLen)
 {
     char *pcToken;
     char *pcEnd;
@@ -325,7 +323,7 @@ static int ProcessPorts(POPConfig *config, char *ErrorString, int ErrStrLen, cha
         return -1;
     }
 
-    pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr);
+    pcToken = strtok(NULL, CONF_SEPARATORS);
     if(!pcToken)
     {
         snprintf(ErrorString, ErrStrLen, "Invalid port list format.");
@@ -342,7 +340,7 @@ static int ProcessPorts(POPConfig *config, char *ErrorString, int ErrStrLen, cha
 
     /* Since ports are specified, clear default ports */
     disablePort( config->ports, POP_DEFAULT_SERVER_PORT );
-    while ((pcToken = strtok_r(NULL, CONF_SEPARATORS, saveptr)) != NULL)
+    while ((pcToken = strtok(NULL, CONF_SEPARATORS)) != NULL)
     {
         if(!strcmp(CONF_END_LIST, pcToken))
         {

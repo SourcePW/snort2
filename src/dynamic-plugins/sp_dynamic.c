@@ -17,7 +17,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2005-2013 Sourcefire, Inc.
  *
  * Author: Steven Sturges
@@ -80,7 +80,6 @@
 
 #include "snort.h"
 #include "profiler.h"
-#include "reload.h"
 
 #ifdef PERF_PROFILING
 PreprocStats dynamicRuleEvalPerfStats;
@@ -90,6 +89,8 @@ extern PreprocStats ruleOTNEvalPerfStats;
 extern SFGHASH *flowbits_hash;
 extern SF_QUEUE *flowbits_bit_queue;
 extern uint32_t flowbits_count;
+extern DynamicRuleNode *dynamic_rules;
+
 
 void DynamicInit(struct _SnortConfig *, char *, OptTreeNode *, int);
 void DynamicParse(char *, OptTreeNode *);
@@ -275,14 +276,8 @@ void DynamicRuleListFree(DynamicRuleNode *head)
     {
         DynamicRuleNode *tmp = head->next;
 
-        /* 
-         * Clean up will be executed only when snort exits or
-         * dynamic libs have changed
-         */
         if (head->freeFunc)
-        {
             head->freeFunc((void *)head->rule);
-        }
 
         free(head);
         head = tmp;
@@ -339,17 +334,17 @@ int RegisterDynamicRule(
                    __FILE__, __LINE__);
     }
 
-    if ( SnortDynamicLibsChanged() || SnortIsInitializing() )
+    if ( SnortIsInitializing() )
     {
         node = (DynamicRuleNode *)SnortAlloc(sizeof(DynamicRuleNode));
 
-        if (sc->dynamic_rules == NULL)
+        if (dynamic_rules == NULL)
         {
-            sc->dynamic_rules = node;
+            dynamic_rules = node;
         }
         else
         {
-            DynamicRuleNode *tmp = sc->dynamic_rules;
+            DynamicRuleNode *tmp = dynamic_rules;
 
             while (tmp->next != NULL)
                 tmp = tmp->next;
@@ -468,24 +463,13 @@ int RegisterDynamicRule(
 #ifdef SNORT_RELOAD
 int ReloadDynamicRules(SnortConfig *sc)
 {
-    /*
-     * We are registering the dynamic rules from old
-     * snort config to new one. Hence this should be
-     * snort_conf. This code will not be execute if
-     * dynamic detection has changed.
-     */
-    DynamicRuleNode *node = snort_conf->dynamic_rules;
-  
-    sc->dynamic_rules = snort_conf->dynamic_rules;
-    sc->loadedDetectionPlugins = snort_conf->loadedDetectionPlugins;
-    snort_conf->loadedDetectionPlugins = NULL;
-    snort_conf->dynamic_rules = NULL;
+    DynamicRuleNode *node = dynamic_rules;
 
     for (; node != NULL; node = node->next)
     {
         int i;
 
-        if (node->rule == NULL || (!node->rule->initialized) || node->rule->options == NULL)
+        if (node->rule == NULL)
             continue;
 
         for (i = 0; node->rule->options[i] != NULL; i++)

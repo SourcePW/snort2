@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2002-2013 Sourcefire, Inc.
 ** Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 **
@@ -149,8 +149,12 @@ extern PreprocSignalFuncNode *preproc_reset_stats_funcs;
 extern PreprocStatsFuncNode *preproc_stats_funcs;
 extern PluginSignalFuncNode *plugin_shutdown_funcs;
 extern PluginSignalFuncNode *plugin_clean_exit_funcs;
+#ifdef SNORT_RELOAD
+extern PostConfigFuncNode *plugin_reload_funcs;
+#endif
 extern OutputFuncNode *AlertList;
 extern OutputFuncNode *LogList;
+extern PeriodicCheckFuncNode *periodic_check_funcs;
 
 /**************************** Detection Plugin API ****************************/
 /* For translation from enum to char* */
@@ -1339,6 +1343,8 @@ void AddFuncToPeriodicCheckList(PeriodicFunc periodic_func, void *arg,
     PeriodicCheckFuncNode **list= &periodic_check_funcs;
     PeriodicCheckFuncNode *node;
 
+    if (list == NULL)
+        return;
 
     node = (PeriodicCheckFuncNode *)SnortAlloc(sizeof(PeriodicCheckFuncNode));
 
@@ -1660,30 +1666,26 @@ void RemoveOutputPlugin(char *keyword)
         return;
 
     /*If head node, remove head*/
-    if(head->keyword != NULL)
+    if (strcasecmp(head->keyword, keyword) == 0)
     {
-        if (strcasecmp(head->keyword, keyword) == 0)
-        {
-            output_config_funcs = head->next;
+        output_config_funcs = head->next;
+        if (head->keyword != NULL)
             free(head->keyword);
-            free(head);
-            return;
-        }
+        free(head);
+        return;
     }
 
     while (head->next != NULL)
     {
         OutputConfigFuncNode *next;
         next = head->next;
-        if(next->keyword != NULL )
+        if (strcasecmp(next->keyword, keyword) == 0)
         {
-            if (strcasecmp(next->keyword, keyword) == 0)
-            {
-                head->next = next->next;
+            head->next = next->next;
+            if (next->keyword != NULL)
                 free(next->keyword);
-                free(next);
-                break;
-            }
+            free(next);
+            break;
         }
         head = head->next;
     }

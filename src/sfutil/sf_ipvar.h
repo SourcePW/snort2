@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 1998-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -71,8 +71,6 @@ typedef struct _var_t {
     /* Linked list of IP variables for the variable table */
     struct _var_t *next;
 
-    uint16_t head_count;
-    uint16_t neg_head_count;
     uint32_t id;
     char *name;
     char *value;

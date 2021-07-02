@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -117,16 +117,16 @@ static int rfb_validate(ServiceValidationArgs* args)
     }
     *v = 0;
     rfb_service_mod.api->add_service(flowp, args->pkt, args->dir, &svc_element,
-                                     APP_ID_VNC_RFB, NULL, version, NULL, NULL);
+                                     APP_ID_VNC_RFB, NULL, version, NULL);
     return SERVICE_SUCCESS;
 
 inprocess:
-    rfb_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element, NULL);
+    rfb_service_mod.api->service_inprocess(flowp, args->pkt, args->dir, &svc_element);
     return SERVICE_INPROCESS;
 
 fail:
     rfb_service_mod.api->fail_service(flowp, args->pkt, args->dir, &svc_element,
-                                      rfb_service_mod.flow_data_index, args->pConfig, NULL);
+                                      rfb_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 }
 

@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -31,7 +31,6 @@
 /*#include "session_record.h" */
 #include <sflsq.h>
 #include "appIdStats.h"
-#include "common_util.h"
 #include "sf_dynamic_preprocessor.h"
 #include "fw_appid.h"
 #include "appInfoTable.h"
@@ -106,8 +105,7 @@ static void dumpStats2(void);
 
 static void deleteRecord(void* record)
 {
-    _dpd.snortFree(record, sizeof(struct AppIdStatRecord),
-           PP_APP_ID, PP_MEM_CATEGORY_MISC);
+    free(record);
 }
 
 void appIdStatsUpdate(tAppIdData* session)
@@ -147,7 +145,7 @@ void appIdStatsUpdate(tAppIdData* session)
         app_id = web_app_id;
         if(!(record = fwAvlLookup(app_id, bucket->appsTree)))
         {
-            record = _dpd.snortAlloc(1, sizeof(*record), PP_APP_ID, PP_MEM_CATEGORY_MISC);
+            record = calloc(1, sizeof(struct AppIdStatRecord));
             if(record)
             {
                 if (fwAvlInsert(app_id, record, bucket->appsTree) == 0)
@@ -161,7 +159,7 @@ void appIdStatsUpdate(tAppIdData* session)
                 }
                 else
                 {
-                    _dpd.snortFree(record, sizeof(*record), PP_APP_ID, PP_MEM_CATEGORY_MISC);
+                    free(record);
                     record = NULL;
                 }
             }
@@ -182,7 +180,7 @@ void appIdStatsUpdate(tAppIdData* session)
 
         if(!(record = fwAvlLookup(app_id, bucket->appsTree)))
         {
-            record = _dpd.snortAlloc(1, sizeof(*record), PP_APP_ID, PP_MEM_CATEGORY_MISC);
+            record = calloc(1, sizeof(struct AppIdStatRecord));
             if(record)
             {
                 if (fwAvlInsert(app_id, record, bucket->appsTree) == 0)
@@ -196,7 +194,7 @@ void appIdStatsUpdate(tAppIdData* session)
                 }
                 else
                 {
-                    _dpd.snortFree(record, sizeof(*record), PP_APP_ID, PP_MEM_CATEGORY_MISC);
+                    free(record);
                     record = NULL;
                 }
             }
@@ -218,7 +216,7 @@ void appIdStatsUpdate(tAppIdData* session)
 
         if(!(record = fwAvlLookup(app_id, bucket->appsTree)))
         {
-            record = _dpd.snortAlloc(1, sizeof(*record), PP_APP_ID, PP_MEM_CATEGORY_MISC);
+            record = calloc(1, sizeof(struct AppIdStatRecord));
             if(record)
             {
                 if (fwAvlInsert(app_id, record, bucket->appsTree) == 0)
@@ -232,7 +230,7 @@ void appIdStatsUpdate(tAppIdData* session)
                 }
                 else
                 {
-                    _dpd.snortFree(record, sizeof(*record), PP_APP_ID, PP_MEM_CATEGORY_MISC);
+                    free(record);
                     record = NULL;
                 }
             }
@@ -252,7 +250,7 @@ void appIdStatsInit(char* appFileName, time_t statsPeriod, size_t rolloverSize, 
     size_t pathLength;
     char *path;
 
-    if (!appFileName || !*appFileName)
+    if (!appFileName[0])
     {
         enableAppStats = false;
         return;
@@ -353,8 +351,7 @@ static struct StatsBucket* getStatsBucket(time_t startTime)
         }
         else if(startTime < lBucket->startTime)
         {
-            bucket = (struct StatsBucket*)_dpd.snortAlloc(1, sizeof(*bucket),
-                     PP_APP_ID, PP_MEM_CATEGORY_MISC);
+            bucket = (struct StatsBucket*) calloc(1, sizeof(struct StatsBucket));
             if(bucket != NULL)
             {
                 bucket->startTime = startTime;
@@ -372,8 +369,7 @@ static struct StatsBucket* getStatsBucket(time_t startTime)
 
     if(lNode == NULL)
     {
-        bucket = (struct StatsBucket*)_dpd.snortAlloc(1, sizeof(*bucket),
-                 PP_APP_ID, PP_MEM_CATEGORY_MISC);
+        bucket = (struct StatsBucket*) calloc(1, sizeof(struct StatsBucket));
         if(bucket != NULL)
         {
             bucket->startTime = startTime;
@@ -412,12 +408,6 @@ static void dumpStats2(void)
             header.type = UNIFIED2_IDS_EVENT_APPSTAT;
             header.length = buffSize - 2*sizeof(uint32_t);
             buffer = malloc(buffSize);
-            if(!buffer)
-            {
-                _dpd.errMsg("dumpStats2: "
-                        "Failed to allocate memory for appRecord in StatsBucket\n");
-                return;
-            }
 #           ifdef DEBUG_STATS
             fprintf(SF_DEBUG_FILE, "Write App Records %u Size: %lu\n",
                     bucket->appRecordCnt, buffSize);
@@ -527,7 +517,7 @@ static void dumpStats2(void)
             free(buffer);
         }
         fwAvlDeleteTree(bucket->appsTree, deleteRecord);
-        _dpd.snortFree(bucket, sizeof(*bucket), PP_APP_ID, PP_MEM_CATEGORY_MISC);
+        free(bucket);
     }
 }
 
@@ -548,7 +538,7 @@ void appIdStatsFini()
     while((bucket = (struct StatsBucket*) sflist_remove_head(currBuckets)) != NULL)
     {
        fwAvlDeleteTree(bucket->appsTree, deleteRecord);
-       _dpd.snortFree(bucket, sizeof(*bucket), PP_APP_ID, PP_MEM_CATEGORY_MISC);
+       free(bucket);
     }
     free(currBuckets);
     if(logBuckets)

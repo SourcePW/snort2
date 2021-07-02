@@ -350,7 +350,6 @@ libsf_gtp_preproc_la_SOURCES = spp_gtp.c spp_gtp.h gtp_config.c \
 	gtp_config.h gtp_parser.c gtp_parser.h gtp_roptions.c \
 	gtp_roptions.h gtp_debug.h $(am__append_1)
 EXTRA_DIST = \
-sf_gtp.vcxproj \
 sf_gtp.dsp
 
 all: all-am

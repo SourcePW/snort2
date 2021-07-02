@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2003-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -31,8 +31,6 @@
 
 #include "detection_util.h"
 #include "hi_buffer_dump.h"
-#include "memory_stats.h"
-
 
 #ifdef DUMP_BUFFER
 TraceBuffer buf[MAX_HTTP_BUFFER_DUMP] = {{"METHOD_DUMP", NULL, 0},
@@ -54,8 +52,7 @@ TraceBuffer buf[MAX_HTTP_BUFFER_DUMP] = {{"METHOD_DUMP", NULL, 0},
 
 void dumpBuffer(HTTP_BUFFER_DUMP type, const u_char *content, uint16_t len) {
     if (dump_enabled) {
-        char *buf_cont = (char *)SnortPreprocAlloc(1, len + 1, PP_HTTPINSPECT, 
-                                      PP_MEM_CATEGORY_SESSION);
+        char *buf_cont = (char *)SnortAlloc(len + 1);
         memcpy(buf_cont, content, len);
         buf[type].buf_content = buf_cont;
         buf[type].length = len;
@@ -66,8 +63,7 @@ void clearReqBuffers() {
     unsigned int i;
     for (i = METHOD_DUMP; i <= CLIENT_BODY_DUMP; i++) {
        if (buf[i].buf_content) {
-          SnortPreprocFree(buf[i].buf_content, buf[i].length, PP_HTTPINSPECT, 
-               PP_MEM_CATEGORY_SESSION);
+          free(buf[i].buf_content);
           buf[i].buf_content = NULL;
           buf[i].length = 0;
        }
@@ -78,8 +74,7 @@ void clearRespBuffers() {
     unsigned int i;
     for (i = STAT_CODE_DUMP; i <= FILE_DATA_DUMP; i++) {
        if (buf[i].buf_content) {
-          SnortPreprocFree(buf[i].buf_content, buf[i].length, PP_HTTPINSPECT, 
-               PP_MEM_CATEGORY_SESSION);
+          free(buf[i].buf_content);
           buf[i].buf_content = NULL;
           buf[i].length = 0;
        }

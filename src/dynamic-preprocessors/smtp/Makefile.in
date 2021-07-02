@@ -369,7 +369,6 @@ libsf_smtp_preproc_la_SOURCES = smtp_config.c smtp_config.h smtp_log.c \
 	smtp_paf.h snort_smtp.c snort_smtp.h spp_smtp.c spp_smtp.h \
 	$(am__append_1)
 EXTRA_DIST = \
-sf_smtp.vcxproj \
 sf_smtp.dsp
 
 all: all-am

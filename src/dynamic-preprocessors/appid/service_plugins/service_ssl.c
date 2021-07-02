@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -32,7 +32,6 @@
 #include "service_ssl.h"
 #include "fw_appid.h"
 #include "serviceConfig.h"
-#include "thirdparty_appid_utils.h"
 
 #define SSL_PORT    443
 
@@ -50,7 +49,6 @@ typedef enum
 #define SSL_SERVER_KEY_XCHG 12
 #define SSL_SERVER_CERT_REQ 13
 #define SSL_SERVER_HELLO_DONE 14
-#define SSL_CERTIFICATE_STATUS 22
 #define SSL2_SERVER_HELLO 4
 #define PCT_SERVER_HELLO 2
 
@@ -71,7 +69,8 @@ typedef enum
 {
     SSL_STATE_INITIATE,      /* Client initiates. */
     SSL_STATE_CONNECTION,    /* Server responds... */
-    SSL_STATE_HEADER
+    SSL_STATE_HEADER,
+    SSL_STATE_DONE
 } SSLState;
 
 typedef struct _SERVICE_SSL_DATA
@@ -91,8 +90,8 @@ typedef struct _SERVICE_SSL_DATA
     /* Data collected from certificates afterwards: */
     char *common_name;
     int   common_name_strlen;
-    int   org_name_strlen;
     char *org_name;
+    int   org_name_strlen;
 } ServiceSSLData;
 
 typedef struct _SERVICE_SSL_CERTIFICATE
@@ -273,7 +272,6 @@ static RNAServiceValidationPort pp[] =
     {&ssl_validate, 614, IPPROTO_TCP},
     {&ssl_validate, 636, IPPROTO_TCP},
     {&ssl_validate, 636, IPPROTO_UDP},
-    {&ssl_validate, 853, IPPROTO_TCP},
     {&ssl_validate, 989, IPPROTO_TCP},
     {&ssl_validate, 990, IPPROTO_TCP},
     {&ssl_validate, 992, IPPROTO_TCP},
@@ -314,12 +312,12 @@ static int ssl_init(const InitServiceAPI * const init_api)
     init_api->RegisterPattern(&ssl_validate, IPPROTO_TCP, SSL_PATTERN3_1, sizeof(SSL_PATTERN3_1), 0, "ssl", init_api->pAppidConfig);
     init_api->RegisterPattern(&ssl_validate, IPPROTO_TCP, SSL_PATTERN3_2, sizeof(SSL_PATTERN3_2), 0, "ssl", init_api->pAppidConfig);
     init_api->RegisterPattern(&ssl_validate, IPPROTO_TCP, SSL_PATTERN3_3, sizeof(SSL_PATTERN3_3), 0, "ssl", init_api->pAppidConfig);
-    unsigned i;
-    for (i=0; i < sizeof(appIdRegistry)/sizeof(*appIdRegistry); i++)
-    {
-        _dpd.debugMsg(DEBUG_LOG,"registering appId: %d\n",appIdRegistry[i].appId);
-        init_api->RegisterAppId(&ssl_validate, appIdRegistry[i].appId, appIdRegistry[i].additionalInfo, init_api->pAppidConfig);
-    }
+	unsigned i;
+	for (i=0; i < sizeof(appIdRegistry)/sizeof(*appIdRegistry); i++)
+	{
+		_dpd.debugMsg(DEBUG_LOG,"registering appId: %d\n",appIdRegistry[i].appId);
+		init_api->RegisterAppId(&ssl_validate, appIdRegistry[i].appId, appIdRegistry[i].additionalInfo, init_api->pAppidConfig);
+	}
 
     return 0;
 }
@@ -417,13 +415,7 @@ void parse_client_initiation(const uint8_t *data, uint16_t size, ServiceSSLData 
                                  + offsetof(ServiceSSLV3ExtensionServerName, string_length)
                                  + sizeof(ext->string_length);
             ss->host_name = malloc(len + 1);    /* Plus NULL term. */
-            if (!ss->host_name)
-            {
-                _dpd.errMsg("parse_client_initiation: "
-                        "Could not allocate memory for host name in ServiceSSLData\n");
-                return;
-            }
-            else
+            if (ss->host_name)
             {
                 memcpy(ss->host_name, str, len);
                 ss->host_name[len] = '\0';
@@ -441,33 +433,36 @@ int parse_certificates(ServiceSSLData *ss)
     int success = 0;
     if (ss->certs_data && ss->certs_len)
     {
-        char *common_name = 0;
-        char *org_name = 0;
+        char *common_name;
+        char *org_name;
+        char *common_name_ptr;
+        char *org_name_ptr;
 
+        /* Pull out certificates from block of data. */
         uint8_t *data = ss->certs_data;
-        int len = ss->certs_len;
+        int      len  = ss->certs_len;
+        ServiceSSLCertificate *certs_head = NULL;
+        ServiceSSLCertificate *certs_curr = NULL;
         int common_name_tot_len = 0;
-        int org_name_tot_len = 0;
-
+        int org_name_tot_len    = 0;
+        int num_certs = 0;
         success = 1;
-        while (len > 0 && !(common_name && org_name))
+        while (len > 0)
         {
-            X509 *cert = NULL;
-            char *cert_name = NULL;
-            char *start = NULL;
-            char *end = NULL;
-            int length = 0;
+            X509 *cert;
+            char *start;
+            char *end;
+            int   length;
 
             /* Get each certificate. */
             int cert_len = ntoh3(data);
             data += 3;
-            len -= 3;
-            if (len < cert_len) 
+            len  -= 3;
+            if (len < cert_len)
             {
                 success = 0;
                 break;
             }
-
             cert = d2i_X509(NULL, (const unsigned char **)&data, cert_len);
             len -= cert_len;    /* Above call increments data pointer already. */
             if (!cert)
@@ -476,71 +471,142 @@ int parse_certificates(ServiceSSLData *ss)
                 break;
             }
 
-            /* look for common name or org name if we haven't seen either */
-            if (!common_name || !org_name)
+            /* Insert certificate entry into list. */
+            certs_curr = calloc(1, sizeof(ServiceSSLCertificate));
+            if (!certs_curr)
             {
-                if ((cert_name = X509_NAME_oneline(X509_get_subject_name(cert), NULL, 0)))
-                {
-                    if (!common_name)
-                    {
-                        if ((start = strstr(cert_name, COMMON_NAME_STR)))
-                        {
-                            start += strlen(COMMON_NAME_STR);
-                            end = strstr(start, FIELD_SEPARATOR);
-                            if (end) *end = 0;
-                            length = strlen(start);
-                            if (length>2 && *start=='*' && *(start+1)=='.') 
-                            {
-                                start += 2; // remove leading .*
-                                length -= 2;
-                            }
-                            common_name = strndup(start, length);
-                            common_name_tot_len += length;
-                            start = NULL;
-                        }
-                    }
-                    if (!org_name)
-                    {
-                        if ((start = strstr(cert_name, ORG_NAME_STR)))
-                        {
-                            start += strlen(ORG_NAME_STR);
-                            end = strstr(start, FIELD_SEPARATOR);
-                            if (end) *end = 0;
-                            length = strlen(start);
-                            if (length>2 && *start=='*' && *(start+1)=='.')
-                            {
-                                start += 2; // remove leading .*
-                                length -= 2;
-                            }
-                            org_name = strndup(start, length);
-                            org_name_tot_len += length;
-                        }
-                    }
-                    free(cert_name);
-                    cert_name = NULL;
-                }
+                X509_free(cert);
+                success = 0;
+                break;
             }
-        X509_free(cert);
+            certs_curr->cert = cert;
+            certs_curr->next = certs_head;
+            certs_head       = certs_curr;
+            num_certs++;
+
+            /* Find "common name" value. */
+            start = strstr(cert->name, COMMON_NAME_STR);
+            if (start)
+            {
+                start += strlen(COMMON_NAME_STR);
+                certs_curr->common_name_ptr = (uint8_t*)start;
+                end = strstr(start, FIELD_SEPARATOR);
+                if (end)
+                {
+                    length = end - start;
+                }
+                else
+                {
+                    length = strlen(start);
+                }
+                certs_curr->common_name_len = length;
+                common_name_tot_len += length;
+            }
+
+            /* Find "org name" value. */
+            start = strstr(cert->name, ORG_NAME_STR);
+            if (start)
+            {
+                start += strlen(ORG_NAME_STR);
+                certs_curr->org_name_ptr = (uint8_t*)start;
+                end = strstr(start, FIELD_SEPARATOR);
+                if (end)
+                {
+                    length = end - start;
+                }
+                else
+                {
+                    length = strlen(start);
+                }
+                certs_curr->org_name_len = length;
+                org_name_tot_len += length;
+            }
+        }
+        if (!success)
+        {
+            goto parse_certificates_clean;
         }
 
-        if (common_name)
+        /* Build up concatonated string of fields. */
+        common_name = NULL;
+        org_name    = NULL;
+        if (common_name_tot_len)
         {
-            ss->common_name = common_name;
-            ss->common_name_strlen = common_name_tot_len;
+            common_name_tot_len += num_certs;    /* Space between each and terminator at end. */
+            common_name = malloc(common_name_tot_len);
+            if (!common_name)
+            {
+                success = 0;
+                goto parse_certificates_clean;
+            }
         }
-
-        if (org_name)
+        if (org_name_tot_len)
         {
-            ss->org_name = org_name;
-            ss->org_name_strlen = org_name_tot_len;
+            org_name_tot_len += num_certs;    /* Space between each and terminator at end. */
+            org_name = malloc(org_name_tot_len);
+            if (!org_name)
+            {
+                free(common_name);
+                success = 0;
+                goto parse_certificates_clean;
+            }
+        }
+        common_name_ptr = common_name;
+        org_name_ptr    = org_name;
+        certs_curr = certs_head;
+        while (certs_curr)
+        {
+            /* Grab this common name. */
+            if (certs_curr->common_name_ptr && certs_curr->common_name_len)
+            {
+                memcpy(common_name_ptr, certs_curr->common_name_ptr, certs_curr->common_name_len);
+                common_name_ptr += certs_curr->common_name_len;
+                *common_name_ptr = ' ';
+                common_name_ptr += 1;
+            }
+
+            /* Grab this org name. */
+            if (certs_curr->org_name_ptr && certs_curr->org_name_len)
+            {
+                memcpy(org_name_ptr, certs_curr->org_name_ptr, certs_curr->org_name_len);
+                org_name_ptr += certs_curr->org_name_len;
+                *org_name_ptr = ' ';
+                org_name_ptr += 1;
+            }
+
+            certs_curr = certs_curr->next;
+        }
+        if (common_name_tot_len)
+        {
+            common_name_ptr  -= 1;
+            *common_name_ptr  = '\0';    /* Put terminator at end rather than space. */
+        }
+        if (org_name_tot_len)
+        {
+            org_name_ptr     -= 1;
+            *org_name_ptr     = '\0';    /* Put terminator at end rather than space. */
+        }
+        ss->common_name        = common_name;
+        ss->common_name_strlen = common_name_tot_len - 1;    /* Minus terminator. */
+        ss->org_name           = org_name;
+        ss->org_name_strlen    = org_name_tot_len - 1;       /* Minus terminator. */
+
+parse_certificates_clean:
+
+        while (certs_head)
+        {
+            certs_curr = certs_head;
+            certs_head = certs_head->next;
+            X509_free(certs_curr->cert);
+            free(certs_curr);
         }
 
         /* No longer need entire certificates.  We have what we came for. */
         free(ss->certs_data);
         ss->certs_data = NULL;
-        ss->certs_len = 0;
+        ss->certs_len  = 0;
     }
-    return success;  // could be 1 even though common_name or org_name == 0
+    return success;    /* 1 is OK; 0 is fail. */
 }
 
 static int ssl_validate(ServiceValidationArgs* args)
@@ -578,8 +644,7 @@ static int ssl_validate(ServiceValidationArgs* args)
     {
         ss->state = SSL_STATE_CONNECTION;
 
-        if (!(flowp->scan_flags & SCAN_CERTVIZ_ENABLED_FLAG) && 
-            dir == APP_ID_FROM_INITIATOR)
+        if (dir == APP_ID_FROM_INITIATOR)
         {
             parse_client_initiation(data, size, ss);
             goto inprocess;
@@ -594,29 +659,33 @@ static int ssl_validate(ServiceValidationArgs* args)
     switch (ss->state)
     {
     case SSL_STATE_CONNECTION:
+        ss->state = SSL_STATE_DONE;
         pct = (ServiceSSLPCTHdr *)data;
         hdr2 = (ServiceSSLV2Hdr *)data;
         hdr3 = (ServiceSSLV3Hdr *)data;
-        /* SSL PCT header? */
         if (size >= sizeof(ServiceSSLPCTHdr) && pct->len >= 0x80 &&
             pct->type == PCT_SERVER_HELLO && ntohs(pct->version) == 0x8001)
         {
             goto success;
         }
-        /* SSL v2 header? */
         if (size >= sizeof(ServiceSSLV2Hdr) && hdr2->len >= 0x80 &&
             hdr2->type == SSL2_SERVER_HELLO && !(hdr2->cert & 0xFE))
         {
-            uint16_t h2v = ntohs(hdr2->version);
-            if ((h2v == 0x0002 || h2v == 0x0300 ||
-                 h2v == 0x0301 || h2v == 0x0303) &&
-                !(hdr2->cipher_len % 3))
+            switch (ntohs(hdr2->version))
             {
-                goto success;
+            case 0x0002:
+            case 0x0300:
+            case 0x0301:
+            case 0x0303:
+                break;
+            default:
+                goto not_v2;
             }
+            if (hdr2->cipher_len % 3) goto not_v2;
+
+            goto success;
+not_v2:;
         }
-        /* it is probably an SSLv3, TLS 1.2, or TLS 1.3 header.
-           First record must be a handshake (type 22). */
         if (size < sizeof(ServiceSSLV3Hdr) ||
             hdr3->type != SSL_HANDSHAKE ||
             (ntohs(hdr3->version) != 0x0300 &&
@@ -642,6 +711,7 @@ static int ssl_validate(ServiceValidationArgs* args)
         ss->tot_length = ntohs(hdr3->len);
         ss->length = ntohs(rec->length) +
                      offsetof(ServiceSSLV3Record, version);
+        if (size == ss->length) goto success;    /* Just a Server Hello. */
         if (ss->tot_length < ss->length) goto fail;
         ss->tot_length -= ss->length;
         if (size < ss->length) goto fail;
@@ -651,6 +721,7 @@ static int ssl_validate(ServiceValidationArgs* args)
         ss->pos = 0;
         /* fall through */
     case SSL_STATE_HEADER:
+        ss->state = SSL_STATE_DONE;
         while (size > 0)
         {
             if (!ss->pos)
@@ -662,9 +733,7 @@ static int ssl_validate(ServiceValidationArgs* args)
                     hdr3 = (ServiceSSLV3Hdr *)data;
                     ver = ntohs(hdr3->version);
                     if (size < sizeof(ServiceSSLV3Hdr) ||
-                        (hdr3->type != SSL_HANDSHAKE &&
-                         hdr3->type != SSL_CHANGE_CIPHER &&
-                         hdr3->type != SSL_APPLICATION_DATA) ||
+                        hdr3->type != SSL_HANDSHAKE ||
                         (ver != 0x0300 &&
                          ver != 0x0301 &&
                          ver != 0x0302 &&
@@ -675,11 +744,6 @@ static int ssl_validate(ServiceValidationArgs* args)
                     data += sizeof(ServiceSSLV3Hdr);
                     size -= sizeof(ServiceSSLV3Hdr);
                     ss->tot_length = ntohs(hdr3->len);
-                    if (hdr3->type == SSL_CHANGE_CIPHER ||
-                        hdr3->type == SSL_APPLICATION_DATA)
-                    {
-                        goto success;
-                    }
                 }
 
                 rec = (ServiceSSLV3Record *)data;
@@ -712,15 +776,15 @@ static int ssl_validate(ServiceValidationArgs* args)
                             ss->in_certs       = 0;
                             ss->certs_curr_len = ss->certs_len;
                             memcpy(ss->certs_data, data + sizeof(ServiceSSLV3CertsRecord), ss->certs_curr_len);
-                            break;
+                            goto success;    /* We got everything we need. */
                         }
                     }
                     /* fall through */
-                case SSL_CERTIFICATE_STATUS:
                 case SSL_SERVER_KEY_XCHG:
                 case SSL_SERVER_CERT_REQ:
                     ss->length = ntohs(rec->length) +
                                  offsetof(ServiceSSLV3Record, version);
+                    if (size == ss->length) goto success;
                     if (ss->tot_length < ss->length) goto fail;
                     ss->tot_length -= ss->length;
                     if (size < ss->length)
@@ -734,6 +798,7 @@ static int ssl_validate(ServiceValidationArgs* args)
                         size -= ss->length;
                         ss->pos = 0;
                     }
+                    ss->state = SSL_STATE_HEADER;
                     break;
                 case SSL_SERVER_HELLO_DONE:
                     if (rec->length) goto fail;
@@ -762,6 +827,7 @@ static int ssl_validate(ServiceValidationArgs* args)
                         memcpy(ss->certs_data + ss->certs_curr_len, data, ss->certs_len - ss->certs_curr_len);
                         ss->in_certs       = 0;
                         ss->certs_curr_len = ss->certs_len;
+                        goto success;    /* We got everything we need. */
                     }
                 }
 
@@ -776,6 +842,7 @@ static int ssl_validate(ServiceValidationArgs* args)
                     size -= ss->length - ss->pos;
                     ss->pos = 0;
                 }
+                ss->state = SSL_STATE_HEADER;
             }
         }
         break;
@@ -784,7 +851,7 @@ static int ssl_validate(ServiceValidationArgs* args)
     }
 
 inprocess:
-    ssl_service_mod.api->service_inprocess(flowp, args->pkt, dir, &svc_element, NULL);
+    ssl_service_mod.api->service_inprocess(flowp, args->pkt, dir, &svc_element);
     return SERVICE_INPROCESS;
 
 fail:
@@ -795,14 +862,13 @@ fail:
     ss->certs_data = NULL;
     ss->host_name = ss->common_name = ss->org_name = NULL;
     ssl_service_mod.api->fail_service(flowp, args->pkt, dir, &svc_element,
-                                      ssl_service_mod.flow_data_index, args->pConfig, NULL);
+                                      ssl_service_mod.flow_data_index, args->pConfig);
     return SERVICE_NOMATCH;
 
 success:
     if (ss->certs_data && ss->certs_len)
     {
-        if (!(flowp->scan_flags & SCAN_CERTVIZ_ENABLED_FLAG) &&
-            !thirdparty_appid_module && !parse_certificates(ss))
+        if (!parse_certificates(ss))
         {
             goto fail;
         }
@@ -829,7 +895,7 @@ success:
         }
         else if (ss->common_name)    // use common name (from server) if we didn't see host name (from client)
         {
-            char *common_name = strndup(ss->common_name, ss->common_name_strlen);
+            char *common_name = strdup(ss->common_name);
             if (common_name)
             {
                 if (flowp->tsession->tls_host)
@@ -847,7 +913,6 @@ success:
                 free(flowp->tsession->tls_cname);
             flowp->tsession->tls_cname = ss->common_name;
             flowp->tsession->tls_cname_strlen = ss->common_name_strlen;
-            flowp->scan_flags |= SCAN_SSL_CERTIFICATE_FLAG;
         }
 
         /* TLS Org Unit */
@@ -860,10 +925,9 @@ success:
         }
 
         ss->host_name = ss->common_name = ss->org_name = NULL;
-        flowp->tsession->tls_handshake_done = true;
     }
     ssl_service_mod.api->add_service(flowp, args->pkt, dir, &svc_element,
-                                     getSslServiceAppId(args->pkt->src_port), NULL, NULL, NULL, NULL);
+                                     getSslServiceAppId(args->pkt->src_port), NULL, NULL, NULL);
     return SERVICE_SUCCESS;
 }
 
@@ -888,8 +952,6 @@ tAppId getSslServiceAppId( short srcPort)
         return APP_ID_SSHELL;
     case 636:
         return APP_ID_LDAPS;
-    case 853:
-        return APP_ID_DNS_OVER_TLS;
     case 989:
         return APP_ID_FTPSDATA;
     case 990:

@@ -1,6 +1,6 @@
 /****************************************************************************
 *
-* Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+* Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 * Copyright (C) 2003-2013 Sourcefire, Inc.
 *
 * This program is free software; you can redistribute it and/or modify
@@ -125,7 +125,14 @@ int http_cmd_lookup_add(CMD_LOOKUP *CmdLookup, char *cmd, int len,
         /*
          * This means the key has already been added.
          */
-        return -1;
+        if(iRet == 1)
+        {
+            return -1;
+        }
+        else
+        {
+            return -1;
+        }
     }
 
     return 0;

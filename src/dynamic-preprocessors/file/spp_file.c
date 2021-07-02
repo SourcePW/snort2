@@ -1,7 +1,7 @@
 /* $Id */
 
 /*
- ** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ ** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  ** Copyright (C) 2013-2013 Sourcefire, Inc.
  **
  **
@@ -49,7 +49,6 @@
 #include <strings.h>
 #include <sys/time.h>
 #endif
-#include <time.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include "file_agent.h"
@@ -75,7 +74,7 @@ static void FileFreeConfig(tSfPolicyUserContextId config);
 static int FileCheckConfig(struct _SnortConfig *);
 static void FileCleanExit(int, void *);
 static void FileUpdateConfig(FileInspectConf *, tSfPolicyUserContextId);
-int FileInspectPrintMemStats(FILE *fd, char* buffer, PreprocMemInfo *meminfo);
+
 
 /** File configuration per Policy
  */
@@ -142,7 +141,6 @@ static void FileInit(struct _SnortConfig *sc, char *argp)
 
         _dpd.addPreprocConfCheck(sc, FileCheckConfig);
         _dpd.registerPreprocStats(FILE_PREPROC_NAME, print_file_stats);
-        _dpd.registerMemoryStatsFunc(PP_FILE_INSPECT, FileInspectPrintMemStats);
         _dpd.addPreprocExit(FileCleanExit, NULL, PRIORITY_LAST, PP_FILE_INSPECT);
 
     }
@@ -155,8 +153,7 @@ static void FileInit(struct _SnortConfig *sc, char *argp)
                 "configured once.\n");
     }
 
-    pPolicyConfig = (FileInspectConf *)_dpd.snortAlloc(1, sizeof(FileInspectConf), PP_FILE_INSPECT,
-            PP_MEM_CATEGORY_CONFIG);
+    pPolicyConfig = (FileInspectConf *)calloc(1, sizeof(FileInspectConf));
     if (!pPolicyConfig)
     {
         DynamicPreprocessorFatalMessage("Could not allocate memory for "
@@ -167,7 +164,7 @@ static void FileInit(struct _SnortConfig *sc, char *argp)
 
     file_config_parse(pPolicyConfig, (u_char *)argp);
     FileUpdateConfig(pPolicyConfig, file_config);
-    file_agent_init(sc, pPolicyConfig);
+    file_agent_init(pPolicyConfig);
     _dpd.addPostConfigFunc(sc, file_agent_thread_init, pPolicyConfig);
 
 }
@@ -213,7 +210,7 @@ static int FileFreeConfigPolicy(
     //do any housekeeping before freeing FileInspectConf
     file_config_free(pPolicyConfig);
     sfPolicyUserDataClear (config, policyId);
-    _dpd.snortFree(pPolicyConfig, sizeof(FileInspectConf), PP_FILE_INSPECT, PP_MEM_CATEGORY_CONFIG);
+    free(pPolicyConfig);
     return 0;
 }
 
@@ -292,8 +289,7 @@ static void FileReload(struct _SnortConfig *sc, char *args, void **new_config)
                 "configured once.\n");
     }
 
-    pPolicyConfig = (FileInspectConf *)_dpd.snortAlloc(1, sizeof(FileInspectConf), PP_FILE_INSPECT,
-            PP_MEM_CATEGORY_CONFIG);
+    pPolicyConfig = (FileInspectConf *)calloc(1, sizeof(FileInspectConf));
     if (!pPolicyConfig)
     {
         DynamicPreprocessorFatalMessage("Could not allocate memory for "
@@ -303,7 +299,7 @@ static void FileReload(struct _SnortConfig *sc, char *args, void **new_config)
 
     file_config_parse(pPolicyConfig, (u_char *)args);
     FileUpdateConfig(pPolicyConfig, file_config);
-    file_agent_init(sc, pPolicyConfig);
+
 }
 
 static int FileReloadVerify(struct _SnortConfig *sc, void *swap_config)
@@ -356,7 +352,7 @@ static int FileFreeUnusedConfigPolicy(
     if (pPolicyConfig->ref_count == 0)
     {
         sfPolicyUserDataClear (config, policyId);
-        _dpd.snortFree(pPolicyConfig, sizeof(FileInspectConf), PP_FILE_INSPECT, PP_MEM_CATEGORY_CONFIG);
+        free(pPolicyConfig);
     }
     return 0;
 }
@@ -429,53 +425,4 @@ static void print_file_stats(int exiting)
             file_inspect_stats.file_transfer_failures);
 
 
-}
-
-int FileInspectPrintMemStats(FILE *fd, char* buffer, PreprocMemInfo *meminfo)
-{
-    time_t curr_time = time(NULL);
-    int len = 0;
-
-    size_t total_heap_memory = meminfo[PP_MEM_CATEGORY_SESSION].used_memory 
-                              + meminfo[PP_MEM_CATEGORY_CONFIG].used_memory;
-    
-    if (fd)
-    {
-        len = fprintf(fd, ",%lu,%u,%u"
-                      ",%lu,%u,%u"
-                      ",%lu"
-                      , meminfo[PP_MEM_CATEGORY_SESSION].used_memory
-                      , meminfo[PP_MEM_CATEGORY_SESSION].num_of_alloc
-                      , meminfo[PP_MEM_CATEGORY_SESSION].num_of_free
-                      , meminfo[PP_MEM_CATEGORY_CONFIG].used_memory
-                      , meminfo[PP_MEM_CATEGORY_CONFIG].num_of_alloc
-                      , meminfo[PP_MEM_CATEGORY_CONFIG].num_of_free
-                      , total_heap_memory);
-       return len;
-    }
-   
-    if (buffer)
-    {
-       len = snprintf(buffer, CS_STATS_BUF_SIZE, "\n\nMemory Statistics for File Inspect at: %s\n"
-       "Total file data saved to disk:           "FMTu64("-10")"bytes\n"
-       "Total file capture max:                  "FMTu64("-10")" \n"
-       "Total file capture memcap:               "FMTu64("-10")" \n"
-       ,ctime(&curr_time)
-       ,file_inspect_stats.file_data_to_disk
-       ,file_inspect_stats.file_capture_max
-       ,file_inspect_stats.file_capture_memcap);
-    }
-    else
-    {
-        _dpd.logMsg("\n");
-        _dpd.logMsg("Memory Statistics for File Inspect at: %s\n", ctime(&curr_time));
-        _dpd.logMsg("Total file data saved to disk:     "FMTu64("-10")" bytes\n", 
-                file_inspect_stats.file_data_to_disk);
-        _dpd.logMsg("Total file capture max:                 "FMTu64("-10")" \n", 
-                file_inspect_stats.file_capture_max);
-        _dpd.logMsg("Total file capture memcap:              "FMTu64("-10")" \n", 
-                file_inspect_stats.file_capture_memcap);
-    }
-    
-    return len;
 }

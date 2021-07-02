@@ -101,8 +101,7 @@ am_libfileAPI_a_OBJECTS = file_service.$(OBJEXT) \
 	file_resume_block.$(OBJEXT) file_mime_config.$(OBJEXT) \
 	file_capture.$(OBJEXT) file_stats.$(OBJEXT) \
 	file_segment_process.$(OBJEXT) circular_buffer.$(OBJEXT) \
-	file_mempool.$(OBJEXT) sf_email_attach_decode.$(OBJEXT) \
-	file_ss.$(OBJEXT)
+	file_mempool.$(OBJEXT) sf_email_attach_decode.$(OBJEXT)
 libfileAPI_a_OBJECTS = $(am_libfileAPI_a_OBJECTS)
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
@@ -369,9 +368,7 @@ libfileAPI_a_SOURCES = \
 	file_mempool.h \
 	../sfutil/sf_email_attach_decode.c \
 	../sfutil/sf_email_attach_decode.h \
-	file_mail_common.h\
-	file_ss.c\
-	file_ss.h
+	file_mail_common.h 
 
 SUBDIRS = libs
 all: all-recursive

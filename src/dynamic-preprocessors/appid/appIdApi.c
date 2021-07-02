@@ -1,5 +1,5 @@
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2005-2013 Sourcefire, Inc.
 **
 ** This program is free software; you can redistribute it and/or modify
@@ -28,7 +28,6 @@
 #include "appIdApi.h"
 #include "fw_appid.h"
 #include "thirdparty_appid_api.h"
-#include "appIdConfig.h"
 
 #define SSL_WHITELIST_PKT_LIMIT 20
 
@@ -98,38 +97,6 @@ tAppId getFwReferredAppId(struct AppIdData *appIdData)
         return fwPickReferredPayloadAppId(appIdData);
     return APP_ID_NONE;
 }
-char* getTlsHost(struct AppIdData *appIdData)
-{
-    if (appIdData && appIdData->tsession)
-    {
-        switch (appIdData->tsession->matched_tls_type)
-        {
-            case MATCHED_TLS_HOST:
-                return appIdData->tsession->tls_host;
-            case MATCHED_TLS_FIRST_SAN:
-                return appIdData->tsession->tls_first_san;
-            case MATCHED_TLS_CNAME:
-                return appIdData->tsession->tls_cname;
-            default:
-                /*tls_orgUnit is intentionally avoided from being
-                   returned as an URL here, even if its the matching one*/
-                if (appIdData->tsession->tls_host)
-                    return appIdData->tsession->tls_host;
-                else if (appIdData->tsession->tls_first_san)
-                    return appIdData->tsession->tls_first_san;
-                else if (appIdData->tsession->tls_cname)
-                    return appIdData->tsession->tls_cname;
-                return NULL;
-        }
-    }
-    return NULL;
-}
-SFGHASH* getFwMultiPayloadList(struct AppIdData *appIdData)
-{
-    if (appIdData)
-        return fwPickMultiPayloadList(appIdData);
-    return NULL;
-}
 bool isSessionSslDecrypted(struct AppIdData *appIdData)
 {
     if (appIdData)
@@ -140,25 +107,7 @@ bool isSessionSslDecrypted(struct AppIdData *appIdData)
 struct AppIdData * getAppIdData(void* lwssn)
 {
     tAppIdData *appIdData = _dpd.sessionAPI->get_application_data(lwssn, PP_APP_ID);
-
     return (appIdData && appIdData->common.fsf_type.flow_type == APPID_SESSION_TYPE_NORMAL)? appIdData : NULL;
-}
-
-int getAppIdSessionPacketCount(struct AppIdData * appIdData)
-{
-    return appIdData ? appIdData->session_packet_count : 0;
-}
-
-bool isHttpInspectionDone(struct AppIdData *appIdSession)
-{
-    if (!appIdSession)
-        return true; // No wait for http discovery if AppId data is unavailable
-    if ((appIdSession->common.fsf_type.flow_type != APPID_SESSION_TYPE_NORMAL)
-        || (TPIsAppIdDone(appIdSession->tpsession) &&
-            !(getAppIdFlag(appIdSession, APPID_SESSION_SSL_SESSION) && !getTlsHost(appIdSession) &&
-              appIdSession->rnaServiceState != RNA_STATE_FINISHED)))
-        return true;
-    return false;
 }
 
 bool IsAppIdInspectingSession(struct AppIdData *appIdSession)
@@ -184,25 +133,6 @@ bool IsAppIdInspectingSession(struct AppIdData *appIdSession)
         {
             return true;
         }
-        if (appidStaticConfig->recheck_for_unknown_appid)
-        {
-            if( (appIdSession->serviceAppId == APP_ID_UNKNOWN_UI || appIdSession->serviceAppId <= APP_ID_NONE) &&
-                 appIdSession->clientAppId <= APP_ID_NONE &&
-                 appIdSession->payloadAppId <= APP_ID_NONE &&
-                 appIdSession->tpAppId <= APP_ID_NONE &&
-                (appIdSession->portServiceAppId <= APP_ID_NONE || appidStaticConfig->recheck_for_portservice_appid) &&
-                 appIdSession->clientServiceAppId <= APP_ID_NONE &&
-                 appIdSession->tpPayloadAppId <= APP_ID_NONE )
-                return true;
-
-            if( appidStaticConfig->check_host_cache_unknown_ssl && getAppIdFlag(appIdSession, APPID_SESSION_SSL_SESSION) &&
-                !(appIdSession->tsession && appIdSession->tsession->tls_host && appIdSession->tsession->tls_cname))
-                return true;
-        }
-        if (appidStaticConfig->check_host_port_app_cache)
-        {
-            return true;
-        }
     }
     return false;
 }
@@ -223,8 +153,9 @@ bool isAppIdAvailable(struct AppIdData *appIdData)
 {
     if (appIdData)
     {
-        return (appIdData->serviceAppId != APP_ID_NONE || appIdData->payloadAppId != APP_ID_NONE) &&
-               (TPIsAppIdAvailable(appIdData->tpsession) || getAppIdFlag(appIdData, APPID_SESSION_NO_TPI));
+        if (getAppIdFlag(appIdData, APPID_SESSION_NO_TPI))
+            return true;
+        return TPIsAppIdAvailable(appIdData->tpsession);
     }
     return false;
 }
@@ -404,6 +335,13 @@ sfaddr_t* getHttpXffAddr(struct AppIdData* appIdData)
         return appIdData->hsession->xffAddr;
     return NULL;
 }
+
+char* getTlsHost(struct AppIdData *appIdData)
+{
+    if (appIdData && appIdData->tsession)
+        return appIdData->tsession->tls_host;
+    return NULL;
+}
 tAppId getPortServiceAppId(struct AppIdData *appIdData)
 {
     if (appIdData)
@@ -490,6 +428,11 @@ char* getNetbiosName(struct AppIdData *appIdData)
     return NULL;
 }
 
+#define APPID_HA_FLAGS_APP (1<<0)
+#define APPID_HA_FLAGS_TP_DONE (1<<1)
+#define APPID_HA_FLAGS_SVC_DONE (1<<2)
+#define APPID_HA_FLAGS_HTTP (1<<3)
+
 uint32_t produceHAState(void *lwssn, uint8_t *buf)
 {
     AppIdSessionHA *appHA = (AppIdSessionHA *)buf;
@@ -517,24 +460,21 @@ uint32_t produceHAState(void *lwssn, uint8_t *buf)
     }
     else
     {
-        memset(appHA, 0, sizeof(*appHA));
+        memset(appHA->appId, 0, sizeof(appHA->appId));
     }
     return sizeof(*appHA);
 }
-uint32_t consumeHAState(void *lwssn, const uint8_t *buf, uint8_t length, uint8_t proto, const struct in6_addr *ip,  uint16_t initiatorPort)
+uint32_t consumeHAState(void *lwssn, const uint8_t *buf, uint8_t length, uint8_t proto, struct in6_addr *ip,  uint16_t initiatorPort)
 {
     AppIdSessionHA *appHA = (AppIdSessionHA *)buf;
     if (appHA->flags & APPID_HA_FLAGS_APP)
     {
         struct AppIdData *appIdData = (tAppIdData*)_dpd.sessionAPI->get_application_data(lwssn, PP_APP_ID);
-	if (appIdData && _dpd.appIdApi->getFlowType(appIdData) != APPID_FLOW_TYPE_NORMAL)
-            return sizeof(*appHA);
-
         if (!appIdData)
         {
             appIdData = appSharedDataAlloc(proto, ip, initiatorPort);
             _dpd.sessionAPI->set_application_data(lwssn, PP_APP_ID, appIdData, (void (*)(void *))appSharedDataDelete);
-            appIdData->serviceAppId = appHA->appId[1];
+	        appIdData->serviceAppId = appHA->appId[1];
             if (appIdData->serviceAppId == APP_ID_FTP_CONTROL)
             {
                 setAppIdFlag(appIdData, APPID_SESSION_CLIENT_DETECTED | APPID_SESSION_NOT_A_SERVICE | APPID_SESSION_SERVICE_DETECTED);
@@ -574,7 +514,7 @@ uint32_t consumeHAState(void *lwssn, const uint8_t *buf, uint8_t length, uint8_t
     return sizeof(*appHA);
 }
 
-char* getDNSQuery(struct AppIdData *appIdData, uint8_t *query_len, bool *got_response)
+char* getDNSQuery(struct AppIdData *appIdData, uint8_t *query_len)
 {
     if (appIdData && appIdData->dsession)
     {
@@ -585,17 +525,12 @@ char* getDNSQuery(struct AppIdData *appIdData, uint8_t *query_len, bool *got_res
             else
                 *query_len = 0;
         }
-        if (got_response)
-            *got_response = (appIdData->dsession->state & DNS_GOT_RESPONSE) ? true : false;
         return appIdData->dsession->host;
     }
     if (query_len)
         *query_len = 0;
-    if (got_response)
-        *got_response = false;
     return NULL;
 }
-
 uint16_t getDNSQueryoffset(struct AppIdData *appIdData)
 {
     if (appIdData && appIdData->dsession)
@@ -621,26 +556,6 @@ uint32_t getDNSTTL(struct AppIdData *appIdData)
     return 0;
 }
 
-uint16_t getDNSOptionsOffset(struct AppIdData* appIdData)
-{
-    if (appIdData && appIdData->dsession)
-        return appIdData->dsession->options_offset;
-    return 0;
-}
-
-static void dumpDebugHostInfo(void)
-{
-    char ipStr[INET6_ADDRSTRLEN];
-
-    ipStr[0] = '\0';
-    if (AppIdDebugHostInfo.family == AF_INET)
-        inet_ntop(AF_INET, (const struct in6_addr*) &AppIdDebugHostInfo.initiatorIp.s6_addr32[3], ipStr, sizeof(ipStr));
-    else
-        inet_ntop(AF_INET6, &AppIdDebugHostInfo.initiatorIp, ipStr, sizeof(ipStr));
-    _dpd.logMsg("AppIdDebugHost: session %s, initiator %s:%u, direction %d, protocol %u, monitorType %d\n",
-                AppIdDebugHostInfo.session ? "not null" : "null", ipStr, AppIdDebugHostInfo.initiatorPort, AppIdDebugHostInfo.direction, AppIdDebugHostInfo.protocol, AppIdDebugHostInfo.monitorType);
-}
-
 static struct AppIdApi appIdDispatchTable = {
     appGetAppName,
     appGetAppId,
@@ -657,7 +572,6 @@ static struct AppIdApi appIdDispatchTable = {
     getFwClientAppId,
     getFwPayloadAppId,
     getFwReferredAppId,
-    getFwMultiPayloadList,
 
     isSessionSslDecrypted,
     IsAppIdInspectingSession,
@@ -707,21 +621,17 @@ static struct AppIdApi appIdDispatchTable = {
     consumeHAState,
 
     getAppIdData,
-    getAppIdSessionPacketCount,
 
     getDNSQuery,
     getDNSQueryoffset,
     getDNSRecordType,
     getDNSResponseType,
     getDNSTTL,
-    getDNSOptionsOffset,
 
     getHttpNewField,
     freeHttpNewField,
     getHttpFieldOffset,
-    getHttpFieldEndOffset,
-    isHttpInspectionDone,
-    dumpDebugHostInfo
+    getHttpFieldEndOffset
 };
 
 void appIdApiInit(struct AppIdApi *api)

@@ -1,7 +1,7 @@
 /* $Id$ */
 /****************************************************************************
  *
- * Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+ * Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
  * Copyright (C) 2011-2013 Sourcefire, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -43,7 +43,6 @@
 #include "snort_bounds.h"
 #include "snort_debug.h"
 #include "snort.h"
-#include "memory_stats.h"
 #include "sfPolicyUserData.h"
 #include "stream_common.h"
 #include "stream_paf.h"
@@ -64,8 +63,7 @@ typedef enum {
     FT_MAX,   // flush len when len >= mfp
     FT_DISC_S,// start of discard
     FT_DISC_E, // End of discard
-    FT_PAF_HDR,
-    FT_PSEUDO_FLUSH
+    FT_PAF_HDR
 } FlushType;
 
 typedef struct {
@@ -126,10 +124,6 @@ static uint32_t s5_paf_flush (
         *flags |= PKT_PDU_TAIL;
         break;
 
-    case FT_PSEUDO_FLUSH:
-        at = s5_len;
-        break;
-
     case FT_DISC_S:
         at = s5_len;
         ps->mode = FLUSH_MODE_DISCARD;
@@ -183,9 +177,6 @@ static uint32_t s5_paf_flush (
 
     if ( !ps->tot )
         *flags |= PKT_PDU_HEAD;
-	
-    if (ft == FT_PSEUDO_FLUSH)
-        return at;
 
     if ( *flags & PKT_PDU_TAIL )
         ps->tot = 0;
@@ -300,7 +291,6 @@ static bool s5_paf_callback (
             return true;
         }
         if(ps->fpt_eoh && (paf != PAF_SKIP)){
-            ps->fpt_eoh += s5_idx;
             return true;
         }
     }
@@ -329,7 +319,6 @@ static inline bool s5_paf_eval (
         return false;
 
     case PAF_FLUSH:
-    case PAF_PSEUDO_FLUSH_SEARCH:
         if ( s5_len >= ps->fpt )
         {
             *ft = FT_PAF;
@@ -343,6 +332,7 @@ static inline bool s5_paf_eval (
         }
         if(ps->fpt_eoh){
             *ft = FT_PAF_HDR;
+            ps->paf = PAF_FLUSH;
             return true;
         }
         return false;
@@ -359,11 +349,8 @@ static inline bool s5_paf_eval (
         return false;
 
     case PAF_SKIP:
-    case PAF_PSEUDO_FLUSH_SKIP:
         if ( s5_len > ps->fpt )
         {
-            bool ret;
-
             if ( ps->fpt > s5_idx )
             {
                 uint32_t delta = ps->fpt - s5_idx;
@@ -373,20 +360,7 @@ static inline bool s5_paf_eval (
                 len -= delta;
             }
             s5_idx = ps->fpt;
-            ps->paf = PAF_SKIP;
-            ret =  s5_paf_callback(ps, ssn, data, len, flags);
-            if (ps->paf == PAF_PSEUDO_FLUSH_SKIP)
-            {
-                /*
-                 * If we have processed entire data, check if we
-                 * can prepare for pseudo flush.
-                 */
-                if (!ret &&  (s5_len < ps->fpt))
-                {
-                    *ft = FT_PSEUDO_FLUSH;
-                }
-            }
-            return ret;
+            return s5_paf_callback(ps, ssn, data, len, flags);
         }
         return false;
 
@@ -551,10 +525,6 @@ uint32_t s5_paf_check (
     {
         ps->seq = ps->pos = seq;
         ps->paf = PAF_SEARCH;
-    }
-    else if (*flags & PKT_PSEUDO_FLUSH)
-    {
-        return s5_paf_flush(pc, ps, FT_PSEUDO_FLUSH, flags);
     }
     else if ( SEQ_GT(seq, ps->seq) )
     {
@@ -742,36 +712,6 @@ uint8_t s5_paf_register_service (struct _SnortConfig *sc,
     return i+1;
 }
 
-/*  cb_mask_cmp
- *
- *  This api compares expected cb_mask w.r.t appid
- *  and cb_mask populated in stream paf_state.
- *
- *  Input  : PAF_Config - Paf configurations.
- *           Service    - Service id like for HTTP id is 5.
- *           c2s        - True  - This represents flow is client to server.
- *                      - False - This represents flow is server to client.
- *           cb_mask    - cb_mask populated in stream paf_state 
- *
- *  Return : -1 - If PAF_Config is not present.
- *            0 - If both the cb_mask matches.
- *            1 - If both the cb_mask does not match.
- */            
-int cb_mask_cmp(void* pv, uint16_t service, bool c2s, uint16_t cb_mask)
-{
-    PAF_Config* pc = (PAF_Config*)pv;
-    PAF_Map* pm;
-
-    if ( !pc )
-        return -1;
-
-    pm = pc->service_map[service] + (c2s?1:0);
-    if (pm && pm->cb_mask && (pm->cb_mask != cb_mask))
-        return 1;
-
-    return 0;
-}
-
 uint16_t s5_paf_service_registration (void* pv, uint16_t service, bool c2s, bool flush)
 {
     PAF_Config* pc = pv;
@@ -781,6 +721,7 @@ uint16_t s5_paf_service_registration (void* pv, uint16_t service, bool c2s, bool
         return false;
 
     pm = pc->service_map[service] + (c2s?1:0);
+
     if ( !pm->cb_mask )
         return 0;
 
@@ -794,8 +735,7 @@ uint16_t s5_paf_service_registration (void* pv, uint16_t service, bool c2s, bool
 
 void* s5_paf_new (void)
 {
-    PAF_Config* pc = SnortPreprocAlloc(1, sizeof(*pc), PP_STREAM, 
-                         PP_MEM_CATEGORY_CONFIG);
+    PAF_Config* pc = SnortAlloc(sizeof(*pc));
     assert( pc );
 
     pc->mfp = ScPafMax();
@@ -819,7 +759,7 @@ void s5_paf_delete (void* pv)
         "%s: prep=%u/%u\n",  __FUNCTION__,
         pc->prep_calls, pc->prep_bytes);)
 
-    SnortPreprocFree(pc, sizeof(*pc), PP_STREAM, PP_MEM_CATEGORY_CONFIG);
+    free(pc);
 }
 
 void s5_paf_register_free (uint8_t id, PAF_Free_Callback cb)

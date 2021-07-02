@@ -1,6 +1,6 @@
 /* $Id$ */
 /*
-** Copyright (C) 2014-2021 Cisco and/or its affiliates. All rights reserved.
+** Copyright (C) 2014-2016 Cisco and/or its affiliates. All rights reserved.
 ** Copyright (C) 2002-2013 Sourcefire, Inc.
 ** Copyright (C) 1998-2002 Martin Roesch <roesch@sourcefire.com>
 
@@ -131,53 +131,46 @@ char ** mSplit(const char *str, const char *sep_chars, const int max_toks,
     char **toks = toks_buf;     /* Pointer to one of the two above */
     char **retstr;
     char *whitespace = " \t";
-    size_t str_length, sep_length;
 
-    assert (num_toks);
+    if (num_toks == NULL)
+        return NULL;
 
     *num_toks = 0;
 
-    if (str == NULL)
+    if ((str == NULL) || (strlen(str) == 0) ||
+        ((sep_chars != NULL) && (strlen(sep_chars) == 0)))
+    {
         return NULL;
-
-    str_length = strlen(str);
-
-    if (str_length == 0)
-        return NULL;
+    }
 
     if (sep_chars == NULL)
         sep_chars = whitespace;
 
-    sep_length = strlen(sep_chars);
-
-    if (sep_length == 0)
-        return NULL;
-
     /* Meta char cannot also be a separator char */
-    for (i = 0; i < sep_length; i++)
+    for (i = 0; i < strlen(sep_chars); i++)
     {
         if (sep_chars[i] == meta_char)
             return NULL;
     }
 
     /* Move past initial separator characters and whitespace */
-    for (i = 0; i < str_length; i++)
+    for (i = 0; i < strlen(str); i++)
     {
-        if (isspace((int)str[i]))
-            continue;
-
-        for (j = 0; j < sep_length; j++)
+        for (j = 0; j < strlen(sep_chars); j++)
         {
-            if (str[i] == sep_chars[j])
+            if ((str[i] == sep_chars[j]) ||
+                isspace((int)str[i]))
+            {
                 break;
+            }
         }
 
         /* Not a separator character or whitespace */
-        if (j == sep_length)
+        if (j == strlen(sep_chars))
             break;
     }
 
-    if (i == str_length)
+    if (i == strlen(str))
     {
         /* Nothing but separator characters or whitespace in string */
         return NULL;
@@ -188,7 +181,7 @@ char ** mSplit(const char *str, const char *sep_chars, const int max_toks,
     if ((cur_tok + 1) == (size_t)max_toks)
     {
         retstr = (char **)SnortAlloc(sizeof(char *));
-        retstr[cur_tok] = SnortStrndup(&str[i], str_length - i);
+        retstr[cur_tok] = SnortStrndup(&str[i], strlen(str) - i);
         if (retstr[cur_tok] == NULL)
         {
             mSplitFree(&retstr, cur_tok + 1);
@@ -201,7 +194,7 @@ char ** mSplit(const char *str, const char *sep_chars, const int max_toks,
 
     /* Mark the beginning of the next tok */
     tok_start = i;
-    for (; i < str_length; i++)
+    for (; i < strlen(str); i++)
     {
         if (!escaped)
         {
@@ -214,14 +207,14 @@ char ** mSplit(const char *str, const char *sep_chars, const int max_toks,
             }
 
             /* See if the current character is a separator */
-            for (j = 0; j < sep_length; j++)
+            for (j = 0; j < strlen(sep_chars); j++)
             {
                 if (str[i] == sep_chars[j])
                     break;
             }
 
             /* It's a normal character */
-            if (j == sep_length)
+            if (j == strlen(sep_chars))
                 continue;
 
             /* Current character matched a separator character.  Trim off
@@ -241,24 +234,24 @@ char ** mSplit(const char *str, const char *sep_chars, const int max_toks,
             cur_tok++;
 
             /* Move past any more separator characters or whitespace */
-            for (; i < str_length; i++)
+            for (; i < strlen(str); i++)
             {
-                if (isspace((int)str[i]))
-                    continue;
-
-                for (j = 0; j < sep_length; j++)
+                for (j = 0; j < strlen(sep_chars); j++)
                 {
-                    if (str[i] == sep_chars[j])
+                    if ((str[i] == sep_chars[j]) ||
+                        isspace((int)str[i]))
+                    {
                         break;
+                    }
                 }
 
                 /* Not a separator character or whitespace */
-                if (j == sep_length)
+                if (j == strlen(sep_chars))
                     break;
             }
 
             /* Nothing but separator characters or whitespace left in the string */
-            if (i == str_length)
+            if (i == strlen(str))
             {
                 *num_toks = cur_tok;
 
@@ -318,7 +311,7 @@ char ** mSplit(const char *str, const char *sep_chars, const int max_toks,
                 }
 
                 /* Trim whitespace at end of last tok */
-                for (j = str_length; j > tok_start; j--)
+                for (j = strlen(str); j > tok_start; j--)
                 {
                     if (!isspace((int)str[j - 1]))
                         break;
@@ -334,7 +327,7 @@ char ** mSplit(const char *str, const char *sep_chars, const int max_toks,
                 return retstr;
             }
 
-            tok_start = i--;
+            tok_start = i;
         }
         else
         {
@@ -389,7 +382,6 @@ static char * mSplitAddTok(const char *str, const int len, const char *sep_chars
     char *tok;
     int tok_len = 0;
     int got_meta = 0;
-    size_t sep_length = strlen(sep_chars);
 
     /* Get the length of the returned tok
      * Could have a maximum token length and use a fixed sized array and
@@ -407,7 +399,7 @@ static char * mSplitAddTok(const char *str, const int len, const char *sep_chars
         else
         {
             /* See if the current character is a separator */
-            for (j = 0; j < sep_length; j++)
+            for (j = 0; j < strlen(sep_chars); j++)
             {
                 if (str[i] == sep_chars[j])
                     break;
@@ -415,7 +407,7 @@ static char * mSplitAddTok(const char *str, const int len, const char *sep_chars
 
             /* It's a non-separator character, so include
              * the meta character in the return tok */
-            if (j == sep_length)
+            if (j == strlen(sep_chars))
                 tok_len++;
 
             got_meta = 0;
@@ -439,7 +431,7 @@ static char * mSplitAddTok(const char *str, const int len, const char *sep_chars
         else
         {
             /* See if the current character is a separator */
-            for (j = 0; j < sep_length; j++)
+            for (j = 0; j < strlen(sep_chars); j++)
             {
                 if (str[i] == sep_chars[j])
                     break;
@@ -447,7 +439,7 @@ static char * mSplitAddTok(const char *str, const int len, const char *sep_chars
 
             /* It's a non-separator character, so include
              * the meta character in the return tok */
-            if (j == sep_length)
+            if (j == strlen(sep_chars))
                 tok[k++] = meta_char;
 
             got_meta = 0;

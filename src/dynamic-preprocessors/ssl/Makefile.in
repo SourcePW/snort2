@@ -351,7 +351,6 @@ libsf_ssl_preproc_la_LDFLAGS = -export-dynamic -module @XCCFLAGS@
 
 libsf_ssl_preproc_la_SOURCES = ssl_setup.c ssl_setup.h $(am__append_1)
 EXTRA_DIST = \
-sf_ssl.vcxproj \
 sf_ssl.dsp
 
 all: all-am
