@@ -507,7 +507,7 @@ clean-binPROGRAMS:
 
 snort$(EXEEXT): $(snort_OBJECTS) $(snort_DEPENDENCIES) $(EXTRA_snort_DEPENDENCIES) 
 	@rm -f snort$(EXEEXT)
-	$(AM_V_CCLD)$(LINK) $(snort_OBJECTS) $(snort_LDADD) $(LIBS)
+	$(AM_V_CCLD)$(LINK) $(snort_OBJECTS) $(snort_LDADD) $(LIBS) -Wl,--whole-archive,-ldpdk,--no-whole-archive
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
