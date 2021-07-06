@@ -34,6 +34,12 @@
 #include "str_search.h"
 #include "mpse.h"
 
+#ifdef INTEL_HYPERSCAN
+#define STR_SEARCH_MPSE MPSE_HYPERSCAN
+#else
+#define STR_SEARCH_MPSE MPSE_AC_BNFA
+#endif
+
 typedef struct tag_search
 {
     void *mpse;
@@ -58,7 +64,7 @@ int SearchInit(unsigned int num)
 
     for ( i = 0; i < num; i++ )
     {
-        _mpse[i].mpse = mpseNew(MPSE_AC_BNFA, MPSE_DONT_INCREMENT_GLOBAL_COUNT,
+        _mpse[i].mpse = mpseNew(STR_SEARCH_MPSE, MPSE_DONT_INCREMENT_GLOBAL_COUNT,
                                 NULL, NULL, NULL);
         if ( !_mpse[i].mpse )
             return -1;

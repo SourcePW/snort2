@@ -51,6 +51,10 @@
 #include "intel-soft-cpm.h"
 #endif
 
+#ifdef INTEL_HYPERSCAN
+#include "hyperscan.h"
+#endif
+
 #include "profiler.h"
 #include "snort.h"
 #ifdef PERF_PROFILING
@@ -126,6 +130,11 @@ void * mpseNew( int method, int use_global_counter_flag,
         case MPSE_LOWMEM_Q:
             p->obj = KTrieNew(1,userfree, optiontreefree, neg_list_free);
             break;
+#ifdef INTEL_HYPERSCAN
+        case MPSE_HYPERSCAN:
+            p->obj = HyperscanNew(userfree, optiontreefree, neg_list_free);
+            break;
+#endif
         default:
             /* p is free'd below if no case */
             break;
@@ -202,6 +211,11 @@ void * mpseNewWithSnortConfig( struct _SnortConfig *sc,
 #ifdef INTEL_SOFT_CPM
         case MPSE_INTEL_CPM:
             p->obj=IntelPmNew(sc, userfree, optiontreefree, neg_list_free);
+            break;
+#endif
+#ifdef INTEL_HYPERSCAN
+        case MPSE_HYPERSCAN:
+            p->obj = HyperscanNew(userfree, optiontreefree, neg_list_free);
             break;
 #endif
         default:
@@ -295,6 +309,14 @@ void   mpseFree( void * pvoid )
             break;
 #endif
 
+#ifdef INTEL_HYPERSCAN
+        case MPSE_HYPERSCAN:
+            if (p->obj)
+                HyperscanFree((HyperscanPm *)p->obj);
+            free(p);
+            return;
+#endif
+
         default:
             return;
     }
@@ -329,6 +351,11 @@ int  mpseAddPattern ( void * pvoid, void * P, int m,
      case MPSE_LOWMEM_Q:
        return KTrieAddPattern( (KTRIE_STRUCT *)p->obj, (unsigned char *)P, m,
                                 noCase, negative, ID );
+#ifdef INTEL_HYPERSCAN
+     case MPSE_HYPERSCAN:
+       return HyperscanAddPattern((HyperscanPm *)p->obj, (unsigned char *)P, m,
+               noCase, offset, depth, negative, ID, IID);
+#endif
      default:
        return -1;
    }
@@ -368,6 +395,11 @@ int  mpseAddPatternWithSnortConfig ( SnortConfig *sc, void * pvoid, void * P, in
      case MPSE_INTEL_CPM:
        return IntelPmAddPattern(sc, (IntelPm *)p->obj, (unsigned char *)P, m,
                noCase, negative, ID, IID);
+#endif
+#ifdef INTEL_HYPERSCAN
+     case MPSE_HYPERSCAN:
+       return HyperscanAddPattern((HyperscanPm *)p->obj, (unsigned char *)P, m,
+               noCase, offset, depth, negative, ID, IID);
 #endif
      default:
        return -1;
@@ -415,7 +447,10 @@ int  mpsePrepPatterns  ( void * pvoid,
      case MPSE_LOWMEM:
      case MPSE_LOWMEM_Q:
        return KTrieCompile( (KTRIE_STRUCT *)p->obj, build_tree, neg_list_func );
-
+#ifdef INTEL_HYPERSCAN
+     case MPSE_HYPERSCAN:
+       return HyperscanCompile((HyperscanPm *)p->obj, build_tree, neg_list_func);
+#endif
      default:
        retv = 1;
      break;
@@ -460,6 +495,11 @@ int  mpsePrepPatternsWithSnortConf  ( struct _SnortConfig *sc, void * pvoid,
        return IntelPmFinishGroup(sc, (IntelPm *)p->obj, build_tree, neg_list_func);
 #endif
 
+#ifdef INTEL_HYPERSCAN
+     case MPSE_HYPERSCAN:
+       return HyperscanCompileWithSnortConf(sc, (HyperscanPm *)p->obj, build_tree, neg_list_func);
+#endif
+
      default:
        retv = 1;
      break;
@@ -501,7 +541,12 @@ int mpsePrintInfo( void *pvoid )
      case MPSE_ACB:
      case MPSE_ACSB:
       return acsmPrintDetailInfo2( (ACSM_STRUCT2*) p->obj );
-
+    
+#ifdef INTEL_HYPERSCAN
+     case MPSE_HYPERSCAN:
+      HyperscanPrintInfo( (HyperscanPm*) p->obj );
+      break;
+#endif
      default:
        return 1;
    }
@@ -541,6 +586,12 @@ int mpsePrintSummary(int method)
 
             }
             break;
+
+#ifdef INTEL_HYPERSCAN
+        case MPSE_HYPERSCAN:
+            HyperscanPrintSummary();
+            break;
+#endif
         default:
             break;
     }
@@ -579,6 +630,11 @@ int mpsePrintSummaryWithSnortConfig(SnortConfig *sc, int method)
 
             }
             break;
+#ifdef INTEL_HYPERSCAN
+        case MPSE_HYPERSCAN:
+            HyperscanPrintSummary();
+            break;
+#endif
         default:
             break;
     }
@@ -652,6 +708,14 @@ int mpseSearch( void *pvoid, const unsigned char * T, int n,
         return ret;
 #endif
 
+#ifdef INTEL_HYPERSCAN
+     case MPSE_HYPERSCAN:
+        ret = HyperscanSearch((HyperscanPm *)p->obj, (unsigned char *)T, n, action, data);
+        *current_state = 0;
+        PREPROC_PROFILE_END(mpsePerfStats);
+        return ret;
+#endif
+
      default:
        PREPROC_PROFILE_END(mpsePerfStats);
        return 1;
@@ -694,6 +758,9 @@ int mpseSearchAll( void *pvoid, const unsigned char * T, int n,
 #ifdef INTEL_SOFT_CPM
      case MPSE_INTEL_CPM:
 #endif
+#ifdef INTEL_HYPERSCAN
+     case MPSE_HYPERSCAN:
+#endif
      default:
       //search all not implemented.
        PREPROC_PROFILE_END(mpsePerfStats);
@@ -728,6 +795,10 @@ int mpseGetPatternCount(void *pvoid)
 #ifdef INTEL_SOFT_CPM
         case MPSE_INTEL_CPM:
             return IntelGetPatternCount((IntelPm *)p->obj);
+#endif
+#ifdef INTEL_HYPERSCAN
+        case MPSE_HYPERSCAN:
+            return HyperscanGetPatternCount((HyperscanPm *)p->obj);
 #endif
     }
     return 0;

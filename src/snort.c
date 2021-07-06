@@ -158,6 +158,10 @@
 #include "sfutil/intel-soft-cpm.h"
 #endif
 
+#ifdef INTEL_HYPERSCAN
+#include "sfutil/hyperscan.h"
+#endif
+
 #include "session_api.h"
 
 #include "stream_common.h"
@@ -720,6 +724,10 @@ static inline void CheckForReload(void)
 #ifdef INTEL_SOFT_CPM
         if (snort_conf->fast_pattern_config->search_method == MPSE_INTEL_CPM)
             IntelPmActivate(snort_conf);
+#endif
+
+#ifdef INTEL_HYPERSCAN
+        HyperscanActivate();
 #endif
 
         snort_swapped = 1;
@@ -3974,6 +3982,10 @@ static void SnortCleanup(int exit_val)
     IntelPmStopInstance();
 #endif
 
+#ifdef INTEL_HYPERSCAN
+    HyperscanFreeGlobalContext();
+#endif
+
     SynToMulticastDstIpDestroy();
     MulticastReservedIpDestroy();
 
@@ -5351,6 +5363,10 @@ void SnortInit(int argc, char **argv)
 #ifdef INTEL_SOFT_CPM
     if (snort_conf->fast_pattern_config->search_method == MPSE_INTEL_CPM)
         IntelPmActivate(snort_conf);
+#endif
+
+#ifdef INTEL_HYPERSCAN
+    HyperscanActivate();
 #endif
 
 #ifdef PPM_MGR

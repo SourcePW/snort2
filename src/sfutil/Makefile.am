@@ -6,6 +6,12 @@ if HAVE_INTEL_SOFT_CPM
 INTEL_SOFT_CPM_SOURCES = intel-soft-cpm.c intel-soft-cpm.h
 endif
 
+if HAVE_INTEL_HYPERSCAN
+INTEL_HYPERSCAN_SOURCES = \
+    hyperscan.c hyperscan.h \
+    hyperscan_common.c hyperscan_common.h
+endif
+
 if BUILD_OPENSSL_MD5
 OPENSSL_MD5 = \
     md5.c md5.h 
@@ -65,6 +71,7 @@ libsfutil_a_SOURCES = \
 	mpse_methods.h \
 	sfdebug.h \
     $(INTEL_SOFT_CPM_SOURCES) \
+    $(INTEL_HYPERSCAN_SOURCES) \
     $(OPENSSL_MD5) \
     $(OPENSSL_SHA)
 
