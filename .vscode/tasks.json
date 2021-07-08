@@ -1,0 +1,12 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "configure",
+            "type": "shell",
+            "command": "./configure CFLAGS='-DHAVE_DAQ_EXT_MODFLOW -DHAVE_DAQ_DATA_CHANNEL_SEPARATE_IP_VERSIONS -DHAVE_DAQ_DATA_CHANNEL_PARAMS -lnuma'"
+        }
+    ]
+}
