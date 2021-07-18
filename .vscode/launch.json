@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "/usr/local/bin/snort",
-            "args": ["-c", "/etc/snort/snort.conf", "-A", "console"],
+            "args": ["-c", "/etc/snort/etc/snort.conf","-A","console","-r","/media/psf/Home/Downloads/net_package/test.0715.2.alert_no.pcap", "-v", "-d"],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],
@@ -22,7 +22,21 @@
                     "ignoreFailures": true
                 }
             ]
-        }
-        
+        },
+        {
+            "name": "snort attach",
+            "type": "cppdbg",
+            "request": "attach",
+            "program": "/usr/local/bin/snort",
+            "processId": "${command:pickProcess}",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "为 gdb 启用整齐打印",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
     ]
 }

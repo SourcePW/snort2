@@ -6,7 +6,7 @@
         {
             "label": "configure",
             "type": "shell",
-            "command": "./configure CFLAGS='-DHAVE_DAQ_EXT_MODFLOW -DHAVE_DAQ_DATA_CHANNEL_SEPARATE_IP_VERSIONS -DHAVE_DAQ_DATA_CHANNEL_PARAMS -lnuma'"
+            "command": "./configure CFLAGS='-DHAVE_DAQ_EXT_MODFLOW -DHAVE_DAQ_DATA_CHANNEL_SEPARATE_IP_VERSIONS -DHAVE_DAQ_DATA_CHANNEL_PARAMS -lnuma -g' --enable-debug --enable-debug-msgs"
         }
     ]
 }
